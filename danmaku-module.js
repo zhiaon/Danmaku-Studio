@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.8.1  当前版本。
+ *   2.9.0  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.8.1",
+  version: "2.9.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -46,41 +46,6 @@ WidgetMetadata = {
       placeholders: [
         { title: "示例 danmu_api", value: "https://{domain}/{token}" }
       ]
-    },
-    {
-      name: "mergeSources",
-      title: "合并弹幕来源数",
-      type: "input",
-      value: "3",
-      description: "合并多少个上游平台源，默认 3 个已覆盖绝大部分弹幕且最快；0=只取单一来源；调高会更全但更慢（每源整集 1~2MB）"
-    },
-    {
-      name: "segmentSeconds",
-      title: "分段时长(秒)",
-      type: "input",
-      value: "180",
-      description: "每次向客户端返回的弹幕时间窗口长度，300 秒以上更省请求"
-    },
-    {
-      name: "segmentPad",
-      title: "分段前向重叠(秒)",
-      type: "input",
-      value: "3",
-      description: "窗口起点向前多取几秒，避免边界弹幕丢失"
-    },
-    {
-      name: "cacheHours",
-      title: "缓存时长(小时)",
-      type: "input",
-      value: "24",
-      description: "分集列表与整集弹幕的本地缓存有效期"
-    },
-    {
-      name: "maxCachedEpisodes",
-      title: "最多缓存集数",
-      type: "input",
-      value: "5",
-      description: "整集弹幕缓存条数上限，超出淘汰最久未使用的（每集约 0.5~1MB）"
     }
   ],
 
@@ -1746,7 +1711,7 @@ function _buildIndex(rawList, loose) {
   order.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
 
   // 多来源合并后插入顺序不再是时间顺序，必须按排序结果同步重排 items，
-  // 否则 _sliceWindow 用 times 的下标去切 items 就会整体错位
+  // 否则 times 与 items 的下标会错位
   var sorted = new Array(order.length);
   var times = new Array(order.length);
   for (var k = 0; k < order.length; k++) {
@@ -1762,81 +1727,23 @@ function _buildIndex(rawList, loose) {
   };
 }
 
-/** // ============================ 4. 分段窗口 ============================
-
-/** 二分查找：第一个 >= v 的下标 */
-function _lowerBound(times, v) {
-  var lo = 0;
-  var hi = times.length;
-  while (lo < hi) {
-    var mid = (lo + hi) >> 1;
-    if (times[mid] < v) lo = mid + 1; else hi = mid;
-  }
-  return lo;
-}
-
 /**
- * 算出本次该返回的时间窗口。
- * 基线固定在 floor(t/seg)*seg 的整数倍上，播放器来回抖 1~2 秒都落在同一窗口，
- * 不会出现"同一段弹幕被请求两次却拿到不同内容"的错位。
- * pad 秒前向重叠保证正好落在整分钟起点的弹幕不会漏。
- */
-function _window(segmentTime, segSeconds, padSeconds) {
-  var t = parseFloat(segmentTime);
-  if (!isFinite(t) || t < 0) t = 0;
-  var base = Math.floor(t / segSeconds) * segSeconds;
-  var start = Math.max(0, base - padSeconds);
-  return { start: start, end: base + segSeconds, base: base };
-}
-
-/** 按窗口从整集索引里切出弹幕（二分定位 + slice，不回整集） */
-function _sliceWindow(rec, win) {
-  var lo = _lowerBound(rec.times, win.start);
-  var hi = _lowerBound(rec.times, win.end);
-  if (hi <= lo) return [];
-  return rec.items.slice(lo, hi);
-}
-
-/** 分段上下文：分段长度 / 前向重叠 / 当前窗口 */
-async function _segmentContext(params) {
-  var seg = _num(params.segmentSeconds, DEFAULT_SEGMENT);
-  var pad = _num(params.segmentPad, DEFAULT_PAD);
-  if (pad >= seg) pad = 0;
-  return { seg: seg, pad: pad, win: _window(params.segmentTime, seg, pad) };
-}
-
-/**
- * 统一出口：加载整集。
- * full=true 回整集弹幕（getComments 用），否则只回 segmentTime 所在窗口（分段接口用）。
+ * 统一出口：加载整集弹幕。
  * 上游失效时返回空数组，不阻断播放。
  */
-async function _danmuAt(params, full) {
+async function _danmuAt(params) {
   var rec = await _loadEpisode(params);
   if (!rec) return [];
-
-  if (full) {
-    console.log(TAG, "commentId=" + rec.commentId, "全量返回", rec.items.length, "条");
-    return rec.items;
-  }
-
-  var ctx = await _segmentContext(params);
-  var list = _sliceWindow(rec, ctx.win);
-  console.log(TAG, "commentId=" + rec.commentId,
-              "窗口[" + ctx.win.start.toFixed(1) + "," + ctx.win.end.toFixed(1) + ")",
-              "命中", list.length, "条");
-  return list;
+  console.log(TAG, "commentId=" + rec.commentId, "全量返回", rec.items.length, "条");
+  return rec.items;
 }
 
 // ============================ 5. 弹幕入口 ============================
 
-/**
- * 获取弹幕。
- * segmentTime 有值时只回该分段；为空时按 0 处理（取第一段），
- * 保证任何调用都拿到"一小段"而不是整集 1.3MB。
- */
+/** 获取弹幕：整集全量返回。 */
 async function getCommentsById(params) {
   try {
-    var list = await _danmuAt(params, true);
+    var list = await _danmuAt(params);
     return { count: list.length, comments: list };
   } catch (e) {
     console.error(TAG, "getCommentsById 失败", e);
@@ -1844,16 +1751,3 @@ async function getCommentsById(params) {
   }
 }
 
-/**
- * 按播放时刻取分段弹幕。
- * 与 getCommentsById 共用缓存，同一时刻重复调用零网络开销。
- */
-async function getDanmuWithSegmentTime(params) {
-  try {
-    var list = await _danmuAt(params);
-    return { count: list.length, comments: list };
-  } catch (e) {
-    console.error(TAG, "getDanmuWithSegmentTime 失败", e);
-    throw e;
-  }
-}
