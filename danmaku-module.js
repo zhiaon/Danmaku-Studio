@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.5.0  当前版本。
+ *   2.6.0  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.5.0",
+  version: "2.6.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -139,7 +139,7 @@ var FAIL_TTL = 5 * 60;
 
 // 弹幕抓取逻辑版本。改动「抓取方式 / 去重规则 / 返回内容」时 +1，
 // 旧缓存会因版本不符自动失效并重新抓取，避免升级后仍显示老数据。
-var CACHE_VERSION = 7;
+var CACHE_VERSION = 8;
 
 // 实测结论：本服务的 episodeId 是"当前缓存"的临时编号，缓存淘汰后 ID 立刻失效（服务端日志：
 //   error: [cache] No URL found for ID: 13126 / [LogVar-API] Comment with ID 13126 not found）。
@@ -149,9 +149,10 @@ var MATCH_CANDIDATES = 4;
 // 弹幕类型判定：中文来源(tencent/youku/bilibili)与 dandan 体系混用，两种词表都要认
 var MOVIE_WORDS = ["movie", "电影", "剧场版", "奇幻片", "完结篇"];
 var TV_WORDS = ["tvseries", "tv", "动漫", "2d动漫", "电视剧", "番剧", "web", "ova"];
-var JUNK_WORDS = ["解说", "合集", "音乐会", "交响", "速通", "臻享", "带你听", "舞台剧",
-                  "广播剧", "纪录片", "同人", "音游", "游戏", "盘点", "吐槽", "reaction",
-                  "remake", "舞台", "特典"];
+// 只保留明确不是正片的条目类型。「合集」不在此列：优酷/腾讯的完整合集
+// 往往是弹幕最全的源（咒术回战合集 47 集），一律排除会漏源。
+var JUNK_WORDS = ["解说", "速通", "盘点", "吐槽", "reaction", "音游",
+                  "带你听", "臻享", "舞台剧", "广播剧"];
 
 // ============================ 小工具 ============================
 
@@ -458,11 +459,50 @@ function _isJunk(anime) {
  * ctx.live: true=真人剧 / false=动漫 / null=未判定
  * ctx.link: 当前播放链接，用来抬高对应平台的官方源
  */
+/**
+ * 标题与关键词的结构化匹配度（0~100）。
+ *
+ * 通用思路：标题 = 「关键词 + 修饰」，修饰越少越接近本体条目。
+ * 不依赖任何具体剧名，所有剧走同一套规则：
+ *
+ *   完全等于关键词                        100
+ *   关键词 + 「之」+ 子篇章（本体分支）      85
+ *   关键词 + 季号（第一季/Ⅱ/Season 2）     80
+ *   关键词 + 其他修饰（疾风传/OAD/少年篇）   55
+ *   关键词 + 数字续作（3龙王传说）          45
+ *   关键词埋在标题中间（博人传 火影忍者…）   20
+ *   不含关键词                              0
+ */
+function _titleMatch(title, kw) {
+  var t = String(title || "").toLowerCase();
+  var k = String(kw || "").toLowerCase().trim();
+  if (!k) return 0;
+  var idx = t.indexOf(k);
+  if (idx < 0) return 0;
+  if (idx > 0) return 20;                       // 关键词不在开头 → 衍生作
+
+  var rest = t.slice(k.length);
+  rest = rest.replace(/[（(][^)）]*[)）]/g, " ");   // 去掉 (年份)
+  rest = rest.replace(/【[^】]*】/g, " ");          // 去掉 【类型】
+  rest = rest.replace(/from\s+[a-z0-9&._\-]+/g, " ");
+  rest = rest.trim();
+  if (!rest) return 100;
+
+  if (/^之/.test(rest)) return 85;               // 之 + 子篇章，属本体
+  // 数字开头必须先于季号判断：「斗罗大陆5重生唐三…第1季」是第5部动态漫，
+  // 若先匹配到尾巴上的「第1季」会被当成第一季，反而压过正传。
+  if (/^[0-9]/.test(rest)) return 45;            // 数字续作
+  if (_titleSeason(rest) !== null) return 80;    // 季号
+  return 55;                                      // 其他修饰
+}
+
 function _rank(animes, ctx) {
   var wantMovie = ctx.type === "movie";
-  var kw = ctx.keyword.toLowerCase();
+  var kw = String(ctx.keyword || "").toLowerCase();
   var wantLive = (ctx.live === true || ctx.live === false) ? ctx.live : null;
+  var liveHint = (ctx.liveHint === true || ctx.liveHint === false) ? ctx.liveHint : null;
   var wantYear = ctx.year || null;
+  var season = ctx.season || null;
   var link = String(ctx.link || "").toLowerCase();
 
   // 播放链接对应的平台：在该平台播放，就优先该平台的官方弹幕
@@ -480,58 +520,66 @@ function _rank(animes, ctx) {
 
     var s = 0;
     var title = String(a.animeTitle || "");
-    var low = title.toLowerCase();
     var src = String(a.source || "").toLowerCase();
 
-    // 类型相符性（权重最高）
+    // 1) 标题匹配度（0~90）：本体条目接近满分，衍生作/碎片大幅靠后
+    var match = _titleMatch(title, kw);
+    s += Math.round(match * 0.9);
+
+    // 2) 类型：电影 vs 剧集
     var movie = _isMovie(a);
     if (wantMovie) s += movie ? 120 : -80;
-    else s += movie ? -80 : 40;
+    else if (movie) s -= 80;
 
-    // 动漫 / 真人剧：只在能判定时才加减分，判不出就保持中立
+    // 3) 动漫 / 真人剧
     var live = _isLiveActionTitle(title);
     if (wantLive !== null) s += (live === wantLive) ? 70 : -70;
+    else if (liveHint !== null) s += (live === liveHint) ? 30 : -10;
 
-    // 年份：2020 动画与 2025 真人剧靠年份区分
+    // 4) 年份
     if (wantYear) {
       var ty = _titleYear(title);
       if (ty) s += (Math.abs(ty - wantYear) <= 1) ? 40 : -40;
     }
 
-    // 标题质量
-    if (kw) {
-      if (low.indexOf(kw) >= 0) s += 60;
-      if (low === kw) s += 40;
-      if (_aliases(a).toLowerCase().indexOf(kw) >= 0) s += 10;
+    // 5) 季号：明确标了当前季的条目优先；标了别的季的降权。
+    //    season>1 时，无季号的合集版需要季集映射才能对齐，略低于直接标了该季的条目。
+    if (season && match >= 80) {
+      var ts = _titleSeason(title);
+      if (ts !== null) s += (ts === season) ? 40 : -45;
     }
+    if (season > 1 && match === 100 && _titleSeason(title) === null) s -= 20;
 
-    // 弹幕量：episodeCount 越大越可能命中真实剧集，完整系列远优于碎片条目
+    // 6) 最终季 / 完结篇：播前面的季时不采用
+    if (season && season <= 1 && /最终季|最终章|完结篇/.test(title)) s -= 30;
+
+    // 7) 精编/重制版：集数与正片不同，弹幕时间轴有偏移
+    if (/特别版|纪念版|重制版|精编版|导演剪辑/.test(title)) s -= 25;
+
+    // 8) 弹幕量：集数越多越可能是完整系列
     var ec = parseInt(a.episodeCount, 10);
     if (isFinite(ec) && ec > 0) s += Math.min(50, Math.round(Math.log(ec + 1) * 12));
 
-    // 来源：官方播放平台源优先，聚合源次之
+    // 9) 来源：官方播放平台源优先，聚合源次之
+    // 官方播放平台（B站/腾讯/优酷/爱奇艺/芒果）优先于聚合源。
+    // 40 分足够压过 dandan 的评分+收藏加成，但小于「本体 vs 衍生」的 45 分差，
+    // 所以不会出现"官方源的衍生作压过聚合源的本体"。
     if (src === "bilibili" || src === "youku" || src === "iqiyi" ||
-        src === "tencent" || src === "mgtv" || src === "qq") s += 30;
+        src === "tencent" || src === "mgtv" || src === "qq") s += 40;
     else if (src.indexOf("dandan") >= 0 && src.indexOf("bahamut") >= 0) s += 12;
     else if (src.indexOf("dandan") >= 0) s += 8;
     else if (src === "bahamut") s += 8;
     else s += 6;
 
-    // 正在该平台播放 → 该平台源再加一档，确保"播放平台源优先"
+    // 10) 播放平台源优先
     if (platform && src === platform) s += 25;
 
-    // 评分：官方平台源常常没有评分字段，权重不能太高，
-    // 否则 dandan 的 8.7 分（+17）会直接盖过 B站 197 集完整版。
+    // 11) 别名命中（弱）
+    if (kw && _aliases(a).toLowerCase().indexOf(kw) >= 0) s += 10;
+
+    // 12) 评分：官方源常无评分字段，权重压低，避免反超完整版
     var r = parseFloat(a.rating);
     if (isFinite(r) && r > 0) s += Math.min(10, r * 1.2);
-
-    // 季号冲突：标题明确写了「第N季」而当前在播别的季，大幅降权。
-    // 否则「凡人修仙传 第四季」会排到「凡人修仙传(2020)」前面，
-    // Forward 自动匹配就会拿第四季（第125~176话）去配第5集。
-    if (ctx.season) {
-      var tseason = _titleSeason(title);
-      if (tseason !== null && tseason !== ctx.season) s -= 40;
-    }
 
     if (_isJunk(a)) s -= 100;
     if (a.isFavorited) s += 5;
@@ -543,7 +591,6 @@ function _rank(animes, ctx) {
   var out = [];
   for (var k = 0; k < scored.length; k++) {
     var it = scored[k].item;
-    // 只回传客户端需要的字段，减小跨桥传输体积
     out.push({
       animeId: String(it.animeId),
       bangumiId: it.bangumiId,
@@ -596,26 +643,32 @@ async function searchDanmu(params) {
       console.log(TAG, "搜索", keyword, "命中", rec.list.length, "条，已缓存");
     }
 
-    // 季数过滤：命中太少时保留全量。只命中 1-2 个源就收窄，
-    // 会让 B站/360 这类没写季号的完整源整批消失（"只能看到一个源"的诱因）。
+    // 不再在搜索阶段按季号硬筛：完整版（斗罗大陆 267 集、凡人 197 集）
+    // 标题里没有「第1季」，一筛就整批消失，反而只剩动态漫碎片。
+    // 季号冲突交给 _rank 的 -45 降权处理，完整版始终保留。
     var pool = rec.list;
-    if (season) {
-      var hit = [];
-      for (var i = 0; i < pool.length; i++) {
-        if (_seasonHit(pool[i], season)) hit.push(pool[i]);
+
+    // 类型表决：Forward 没给明确信号时，按候选中占多数的类型给弱偏好。
+    // 同名真人剧和动漫并存时（凡人修仙传 2020 动画 vs 2025 电视剧），
+    // 多数派排前面，少数派仍然保留，用户手动也能选到。
+    var wantLive = _inferLiveAction(params);
+    var liveHint = null;
+    if (wantLive === null) {
+      var lc = 0, ac = 0;
+      for (var q = 0; q < pool.length; q++) {
+        if (_isLiveActionTitle(pool[q] && pool[q].animeTitle)) lc++;
+        else ac++;
       }
-      if (hit.length >= 3) {
-        console.log(TAG, "第" + season + "季命中", hit.length, "条");
-        pool = hit;
-      } else if (hit.length > 0) {
-        console.log(TAG, "第" + season + "季仅命中", hit.length, "条，保留全量避免候选过少");
-      }
+      if (lc > 0 && ac > 0) liveHint = lc > ac;
+      console.log(TAG, "类型表决：动漫 " + ac + " / 真人剧 " + lc +
+        (liveHint === null ? "" : (" → 偏好" + (liveHint ? "真人剧" : "动漫"))));
     }
 
     return { animes: _rank(pool, {
       type: params.type,
       keyword: keyword,
-      live: _inferLiveAction(params),
+      live: wantLive,
+      liveHint: liveHint,
       link: params.link,
       year: _inferYear(params),
       season: isFinite(parseInt(season, 10)) ? parseInt(season, 10) : null
@@ -867,6 +920,22 @@ function _titleSeason(t) {
   if (m) { var a = parseInt(m[1], 10); if (isFinite(a) && a > 0) return a; }
   m = s.match(/\bS([0-9]{1,2})\b/i);
   if (m) { var b = parseInt(m[1], 10); if (isFinite(b) && b > 0) return b; }
+  // 罗马数字季号：斗罗大陆Ⅱ / II / Ⅲ
+  var ROMAN = { "Ⅰ": 1, "Ⅱ": 2, "Ⅲ": 3, "Ⅳ": 4, "Ⅴ": 5, "Ⅵ": 6, "Ⅶ": 7, "Ⅷ": 8, "Ⅸ": 9, "Ⅹ": 10 };
+  m = s.match(/[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]/);
+  if (m && ROMAN[m[0]]) return ROMAN[m[0]];
+  m = s.match(/\b(X{0,1}(?:IX|IV|V?I{1,3}))\b/);
+  if (m) {
+    var rstr = m[1], rv = 0;
+    if (rstr.indexOf("X") === 0) { rv += 10; rstr = rstr.slice(1); }
+    if (rstr.indexOf("IX") === 0) { rv += 9; rstr = rstr.slice(2); }
+    else if (rstr.indexOf("IV") === 0) { rv += 4; rstr = rstr.slice(2); }
+    else {
+      if (rstr.indexOf("V") === 0) { rv += 5; rstr = rstr.slice(1); }
+      rv += rstr.length;
+    }
+    if (rv > 0 && rv <= 20) return rv;
+  }
   return null;
 }
 
