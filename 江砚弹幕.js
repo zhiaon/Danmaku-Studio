@@ -20,6 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
+ *   1.2.3  弹幕服务器参数描述与占位符改为通用表述，不再限定 LogVar。
  *   1.2.2  移除 getDanmuWithSegmentTime 注册，使弹幕入口与 danmu_api 完全一致。
  *          此前 Forward 优先调用分段接口、每次只回 180 秒窗口弹幕，导致弹幕数远少于 danmu_api。
  *   1.2.1  弹幕入口返回格式改为 {count, comments}，与 danmu_api 模块对齐。
@@ -40,7 +41,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "1.2.2",
+  version: "1.2.3",
   requiredVersion: "0.0.2",
   description: "通用弹幕",
   author: "江砚",
@@ -52,9 +53,9 @@ WidgetMetadata = {
       title: "弹幕服务器",
       type: "input",
       value: "https://vidm.zhiaon.top/nzhyddtld",
-      description: "LogVar 弹幕API 基地址，末尾不带 /",
+      description: "DandanPlay v2 弹幕 API 基地址（danmu_api 兼容协议），末尾不带 /",
       placeholders: [
-        { title: "LogVar（vidm.zhiaon.top）", value: "https://vidm.zhiaon.top/nzhyddtld" },
+        { title: "江砚弹幕（vidm.zhiaon.top）", value: "https://vidm.zhiaon.top/nzhyddtld" },
         { title: "弹弹play 官方", value: "https://api.dandanplay.net" }
       ]
     },
