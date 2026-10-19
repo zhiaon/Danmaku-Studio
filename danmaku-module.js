@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.9.4  当前版本。
+ *   2.9.5  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -30,8 +30,8 @@
 
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
-  title: "江砚弹幕",
-  version: "2.9.4",
+  title: "江砚弹幕 v2.9.5",
+  version: "2.9.5",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -71,15 +71,6 @@ WidgetMetadata = {
       id: "getComments",
       title: "获取弹幕",
       functionName: "getCommentsById",
-      type: "danmu",
-      params: []
-    },
-    {
-      // 官方 danmu_api 也注册了这个模块。Forward 的自动匹配链路会用到它，
-      // 缺失时可能退化成"只能手动选择"。实现上直接复用整集全量返回。
-      id: "getDanmuWithSegmentTime",
-      title: "获取指定时刻弹幕",
-      functionName: "getDanmuWithSegmentTime",
       type: "danmu",
       params: []
     }
@@ -583,11 +574,24 @@ function _rank(animes, ctx) {
   }
   scored.sort(function (x, y) { return y.score - x.score; });
 
-  // 原样返回服务端对象，只调整顺序。
-  // 之前裁剪成固定字段，丢了 isFavorited 等字段，Forward 无法完成自动匹配。
+  // 保持 v2.8.1 的字段形态：animeId 必须是字符串。
+  // 改成透传原始对象（animeId 变数字）后自动匹配失效，已回退。
   var out = [];
   for (var k = 0; k < scored.length; k++) {
-    out.push(scored[k].item);
+    var it = scored[k].item;
+    out.push({
+      animeId: String(it.animeId),
+      bangumiId: it.bangumiId,
+      animeTitle: String(it.animeTitle || ""),
+      type: it.type,
+      typeDescription: it.typeDescription,
+      imageUrl: it.imageUrl,
+      source: it.source,
+      rating: it.rating,
+      episodeCount: it.episodeCount,
+      startDate: it.startDate,
+      aliases: it.aliases
+    });
     if (out.length >= SEARCH_TOP_N) break;
   }
   return out;
@@ -737,13 +741,19 @@ async function getDetailById(params) {
       }
     }
 
-    // 原样返回服务端 episode，不做字段裁剪、不转换类型。
-    // Forward 依赖 episodeId 的原始形态建立 commentId 关联。
+    // 与 v2.8.1 一致：episodeId 统一转成字符串。
     var out = [];
     for (var k = 0; k < eps.length; k++) {
       var e = eps[k];
       if (!e || e.episodeId === undefined || e.episodeId === null) continue;
-      out.push(e);
+      out.push({
+        seasonId: e.seasonId,
+        episodeId: String(e.episodeId),
+        episodeTitle: String(e.episodeTitle || ""),
+        episodeNumber: e.episodeNumber,
+        airDate: e.airDate,
+        url: e.url
+      });
     }
 
     // 用户正在选集，趁这段时间把弹幕下好，点播放时直接命中缓存。
@@ -1755,8 +1765,7 @@ function _buildIndex(rawList, loose, skipDedup) {
     if (m === undefined || m === null) m = "";
     else if (typeof m !== "string") m = String(m);
 
-    // 保留 t（时间）和 cid，与服务端原始条目形态一致，Forward 解析更稳
-    var item = { p: p, m: m, t: t };
+    var item = { p: p, m: m };
     if (d.cid !== undefined && d.cid !== null) item.cid = d.cid;
     items.push(item);
     times.push(t);
