@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.9.1  当前版本。
+ *   2.9.2  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.9.1",
+  version: "2.9.2",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -628,6 +628,21 @@ async function searchDanmu(params) {
     // 标题里没有「第1季」，一筛就整批消失，反而只剩动态漫碎片。
     // 季号冲突交给 _rank 的 -45 降权处理，完整版始终保留。
     var pool = rec.list;
+
+    // 集数不够的源直接剔除：播放第 213 集时，「完美世界 第一季」（78 集）
+    // 根本不含这一集，留在候选里只会让 Forward 选到它然后匹配失败。
+    var wantEp = parseInt(params.episode, 10);
+    if (isFinite(wantEp) && wantEp > 1) {
+      var enough = [];
+      for (var g = 0; g < pool.length; g++) {
+        var ec0 = parseInt(pool[g] && pool[g].episodeCount, 10);
+        if (!isFinite(ec0) || ec0 <= 0 || ec0 >= wantEp) enough.push(pool[g]);
+      }
+      if (enough.length && enough.length < pool.length) {
+        console.log(TAG, "剔除 " + (pool.length - enough.length) + " 个集数不足的源（需要第" + wantEp + "集）");
+        pool = enough;
+      }
+    }
 
     // 类型表决：Forward 没给明确信号时，按候选中占多数的类型给弱偏好。
     // 同名真人剧和动漫并存时（凡人修仙传 2020 动画 vs 2025 电视剧），
