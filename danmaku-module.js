@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.8.3  当前版本。
+ *   2.8.4  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.8.3",
+  version: "2.8.4",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -51,8 +51,8 @@ WidgetMetadata = {
       name: "danmuOffset",
       title: "弹幕时间偏移(秒)",
       type: "input",
-      value: "0",
-      description: "弹幕比画面早就填正数（如 30），比画面晚就填负数（如 -30）。片头长度不同会造成整体偏移，默认 0 不调整"
+      value: "60",
+      description: "默认 60（按一分钟片头估）。弹幕还是超前就继续加大，变成滞后就改小或填负数。不用改也能正常播放"
     }
   ],
 
