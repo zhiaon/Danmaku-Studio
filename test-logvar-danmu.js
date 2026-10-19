@@ -64,9 +64,8 @@ global.Widget = {
 };
 
 // ---------- 加载模块 ----------
-// 兼容两种布局：开发时 ./widgets/江砚弹幕.js，发布仓库根目录 ./江砚弹幕.js
-// 旧别名 logvar-danmu.js 已废弃，仅作最后兜底
-const CANDIDATES = ['./widgets/江砚弹幕.js', './江砚弹幕.js', './widgets/logvar-danmu.js'];
+// 兼容两种布局：开发时 ./widgets/danmaku-module.js，发布仓库根目录 ./danmaku-module.js
+const CANDIDATES = ['./widgets/danmaku-module.js', './danmaku-module.js', './widgets/江砚弹幕.js'];
 const MODULE_PATH = process.env.MODULE_PATH || CANDIDATES.find(function (p) { return fs.existsSync(p); });
 if (!MODULE_PATH) {
   console.error('找不到模块文件，试过：' + CANDIDATES.join(', '));
