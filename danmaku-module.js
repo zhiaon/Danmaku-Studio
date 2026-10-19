@@ -42,7 +42,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "1.3.2",
+  version: "1.3.3",
   requiredVersion: "0.0.2",
   description: "通用弹幕",
   author: "江砚",
@@ -53,7 +53,10 @@ WidgetMetadata = {
       name: "server",
       title: "弹幕服务器",
       type: "input",
-      description: "DandanPlay v2 弹幕 API 基地址（danmu_api 兼容协议），末尾不带 /"
+      description: "DandanPlay v2 弹幕 API 基地址（danmu_api 兼容协议），末尾不带 /",
+      placeholders: [
+        { title: "示例 danmu_api", value: "https://{domain}/{token}" }
+      ]
     },
     {
       name: "mergeSources",
