@@ -1113,7 +1113,8 @@ async function _danmuAt(params, full) {
  */
 async function getCommentsById(params) {
   try {
-    return await _danmuAt(params, true);
+    var list = await _danmuAt(params, true);
+    return { count: list.length, comments: list };
   } catch (e) {
     console.error(TAG, "getCommentsById 失败", e);
     throw e;
@@ -1126,7 +1127,8 @@ async function getCommentsById(params) {
  */
 async function getDanmuWithSegmentTime(params) {
   try {
-    return await _danmuAt(params);
+    var list = await _danmuAt(params);
+    return { count: list.length, comments: list };
   } catch (e) {
     console.error(TAG, "getDanmuWithSegmentTime 失败", e);
     throw e;
