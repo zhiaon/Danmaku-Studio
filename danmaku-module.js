@@ -31,9 +31,9 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "1.4.0",
+  version: "1.4.1",
   requiredVersion: "0.0.2",
-  description: "通用弹幕",
+  description: "多平台弹幕合并，全量加载",
   author: "江砚",
   site: "https://github.com/zhiaon/jiangyan-danmu",
 
