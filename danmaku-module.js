@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.0.1  当前版本。
+ *   2.1.0  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.0.1",
+  version: "2.1.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -139,7 +139,7 @@ var FAIL_TTL = 5 * 60;
 
 // 弹幕抓取逻辑版本。改动「抓取方式 / 去重规则 / 返回内容」时 +1，
 // 旧缓存会因版本不符自动失效并重新抓取，避免升级后仍显示老数据。
-var CACHE_VERSION = 2;
+var CACHE_VERSION = 3;
 
 // 实测结论：本服务的 episodeId 是"当前缓存"的临时编号，缓存淘汰后 ID 立刻失效（服务端日志：
 //   error: [cache] No URL found for ID: 13126 / [LogVar-API] Comment with ID 13126 not found）。
@@ -410,15 +410,16 @@ function _rank(animes, ctx) {
       if (_aliases(a).toLowerCase().indexOf(kw) >= 0) s += 10;
     }
 
-    // 弹幕量：episodeCount 越大越可能命中真实剧集
+    // 弹幕量：episodeCount 越大越可能命中真实剧集，完整系列远优于碎片条目
     var ec = parseInt(a.episodeCount, 10);
-    if (isFinite(ec) && ec > 0) s += Math.min(30, Math.round(Math.log(ec + 1) * 12));
+    if (isFinite(ec) && ec > 0) s += Math.min(50, Math.round(Math.log(ec + 1) * 12));
 
-    // 来源：dandan 合并源弹幕最全；纯国产平台源偏冷门
-    if (src.indexOf("dandan") >= 0 && src.indexOf("bahamut") >= 0) s += 25;
-    else if (src.indexOf("dandan") >= 0) s += 20;
+    // 来源：bilibili 常为官方源优先；dandan/bahamut 合并源弹幕丰富；其余适中
+    if (src === "bilibili") s += 15;
+    else if (src.indexOf("dandan") >= 0 && src.indexOf("bahamut") >= 0) s += 15;
+    else if (src.indexOf("dandan") >= 0) s += 12;
     else if (src === "bahamut") s += 12;
-    else if (src === "tencent" || src === "youku" || src === "bilibili") s += 4;
+    else if (src === "tencent" || src === "youku") s += 8;
     else s += 8;
 
     // 评分
