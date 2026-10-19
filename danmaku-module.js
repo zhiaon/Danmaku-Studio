@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.9.0  当前版本。
+ *   2.9.1  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.9.0",
+  version: "2.9.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -827,6 +827,10 @@ async function _matchDetail(params, fileName) {
 
 /** 拉取单集弹幕原始数组；失败或空返回 null */
 async function _fetchRaw(params, server, commentId) {
+  return _once("c:" + commentId, function () { return _fetchRawInner(params, server, commentId); });
+}
+
+async function _fetchRawInner(params, server, commentId) {
   var data;
   try {
     data = _unwrap(
@@ -967,6 +971,24 @@ function _seasonConflict(title, eps, season) {
  * 所以这里不取"第一个命中的"，而是把候选全取一遍再比数量。
  * 每个来源只请求一次，取到的原始弹幕随返回值交给合并阶段复用，不重复下载。
  */
+/**
+ * 同一资源的并发请求只发一次。
+ * 预取和播放几乎同时请求同一集时，如果不合并，两份 1.5MB 会重复下载，
+ * 用户在播放页干等双倍时间。
+ */
+var _inflight = Object.create(null);
+
+function _once(key, fn) {
+  var k = String(key);
+  if (_inflight[k]) return _inflight[k];
+  var pr = Promise.resolve().then(fn).then(
+    function (v) { delete _inflight[k]; return v; },
+    function (e) { delete _inflight[k]; throw e; }
+  );
+  _inflight[k] = pr;
+  return pr;
+}
+
 /** 并发上限控制：并行执行 fn，同时最多 limit 个 */
 async function _mapLimit(items, limit, fn) {
   var out = new Array(items.length);
@@ -1227,6 +1249,10 @@ function _markCooling(danmuKey, reason) {
 
 /** 搜索列表（带缓存，不做季数过滤/排序，供多来源合并复用） */
 async function _cachedSearchList(params, keyword) {
+  return _once("s:" + keyword, function () { return _cachedSearchListInner(params, keyword); });
+}
+
+async function _cachedSearchListInner(params, keyword) {
   var key = K_SEARCH + _hash(keyword + "|v" + CACHE_VERSION);
   var rec = _scache(key, SEARCH_CACHE_HOURS * 3600);
   if (rec && Array.isArray(rec.list)) return rec.list;
@@ -1250,6 +1276,11 @@ async function _cachedSearchList(params, keyword) {
 
 /** 分集列表（带缓存）。force=true 忽略缓存强刷 —— episodeId 会随上游缓存淘汰失效 */
 async function _cachedBangumi(params, animeId, force) {
+  if (force) return _cachedBangumiInner(params, animeId, true);
+  return _once("b:" + animeId, function () { return _cachedBangumiInner(params, animeId, false); });
+}
+
+async function _cachedBangumiInner(params, animeId, force) {
   var key = K_BANGUMI + animeId;
   var rec = force ? null : _scache(key, _num(params.cacheHours, DEFAULT_CACHE_HOURS) * 3600);
   if (rec && Array.isArray(rec.episodes)) return rec.episodes;
@@ -1547,17 +1578,20 @@ function _prefetchEpisode(params, epNo) {
  * 返回约定：成功返回 rec；ID 失效 / 上游失效 / 该集没弹幕返回 null（上层转空数组）。
  */
 async function _loadEpisode(params) {
-  var ttl = _num(params.cacheHours, DEFAULT_CACHE_HOURS) * 3600;
-  var maxEp = Math.floor(_num(params.maxCachedEpisodes, DEFAULT_MAX_EPISODES));
-
-  // 缓存键用"片名+季+集"的逻辑标识，不用易失效的 episodeId，缓存才能跨缓存淘汰继续有效
-  var cands = _matchFilenames(params);
-  var logical = cands.length ? cands[0]
+  // 缓存键用"片名+季+集"的逻辑标识，不用易失效的 episodeId
+  var cands0 = _matchFilenames(params);
+  var logical0 = cands0.length ? cands0[0]
     : (params.commentId ? "id:" + params.commentId
       : (params.tmdbId ? "tmdb:" + params.tmdbId + ":" + params.type : ""));
-  if (!logical) throw new Error("无法确定弹幕标识（缺少 commentId 与片名/季/集）");
+  if (!logical0) throw new Error("无法确定弹幕标识（缺少 commentId 与片名/季/集）");
+  var dk0 = K_COMMENT + _hash(logical0);
+  // 预取与播放同时请求同一集时合并成一个请求，避免重复下载整集弹幕
+  return _once("e:" + dk0, function () { return _loadEpisodeCore(params, logical0, dk0); });
+}
 
-  var dk = K_COMMENT + _hash(logical);
+async function _loadEpisodeCore(params, logical, dk) {
+  var ttl = _num(params.cacheHours, DEFAULT_CACHE_HOURS) * 3600;
+  var maxEp = Math.floor(_num(params.maxCachedEpisodes, DEFAULT_MAX_EPISODES));
   if (_isCooling(dk)) {
     console.log(TAG, "该集处于失败冷却期，跳过请求", logical);
     return null;
@@ -1612,7 +1646,7 @@ async function _loadEpisode(params) {
   var merged = await _expandSources(params, _server(params), hit, realEp, globalNumbering);
   var n = merged.n || 1;
 
-  var idx = _buildIndex(merged.raw, n > 1);
+  var idx = _buildIndex(merged.raw, n > 1, n <= 1);
   if (idx.items.length === 0) {
     _markCooling(dk, "弹幕全部无效");
     return null;
@@ -1654,8 +1688,8 @@ function _danmuKey(d, loose) {
   if (typeof p === "number") p = String(p);
   if (typeof p !== "string") p = "";
 
-  var comma = p.indexOf(",");
-  var t = parseFloat(comma >= 0 ? p.slice(0, comma) : p);
+  // parseFloat 遇到逗号自动停止，省掉 indexOf + slice
+  var t = parseFloat(p);
   if (!isFinite(t)) return null;
 
   var m = d.m;
@@ -1664,9 +1698,10 @@ function _danmuKey(d, loose) {
   var text = m.trim();
   if (!text) return null;
 
+  // 用整数键代替 toFixed 字符串：2 万条时这一步占去重耗时的六成以上
   return loose
-    ? (t.toFixed(1) + "|" + text)
-    : (t.toFixed(3) + "|" + p + "|" + m);
+    ? (Math.round(t * 10) + "\u0001" + text)
+    : (Math.round(t * 1000) + "\u0001" + p + "\u0001" + m);
 }
 
 /**
@@ -1676,9 +1711,9 @@ function _danmuKey(d, loose) {
  *   - 只保留 {p,m,cid}，去掉 t/like 等客户端不需要的字段
  * 排序用 时间→原始顺序 双键稳定排序，同时间戳弹幕先后不乱。
  */
-function _buildIndex(rawList, loose) {
-  var slim = [];
-  var order = [];       // [time, originalIndex]
+function _buildIndex(rawList, loose, skipDedup) {
+  var items = [];
+  var times = [];
   var seen = Object.create(null);
   var dropped = 0;
 
@@ -1686,15 +1721,20 @@ function _buildIndex(rawList, loose) {
     var d = rawList[i];
     if (!d) { dropped++; continue; }
 
-    var key = _danmuKey(d, loose);
-    if (key === null) { dropped++; continue; }
-    if (seen[key]) { dropped++; continue; }
-    seen[key] = 1;
+    var m0 = d.m;
+    if (m0 === undefined || m0 === null) m0 = "";
+    else if (typeof m0 !== "string") m0 = String(m0);
+    if (!m0.trim()) { dropped++; continue; }
+
+    if (!skipDedup) {
+      var key = _danmuKey(d, loose);
+      if (key === null) { dropped++; continue; }
+      if (seen[key]) { dropped++; continue; }
+      seen[key] = 1;
+    }
 
     var p = d.p;
-    if (typeof p === "number") p = String(p);
-    if (typeof p !== "string") p = "";
-
+    if (typeof p !== "string") p = String(p === undefined || p === null ? "" : p);
     var comma = p.indexOf(",");
     var t = parseFloat(comma >= 0 ? p.slice(0, comma) : p);
 
@@ -1704,23 +1744,33 @@ function _buildIndex(rawList, loose) {
 
     var item = { p: p, m: m };
     if (d.cid !== undefined && d.cid !== null) item.cid = d.cid;
-    slim.push(item);
-    order.push([t, slim.length - 1]);
+    items.push(item);
+    times.push(t);
   }
 
-  order.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+  // 单源本身就是时间顺序，只有多源合并且出现逆序时才需要重排
+  var needSort = false;
+  for (var q = 1; q < times.length; q++) {
+    if (times[q] < times[q - 1]) { needSort = true; break; }
+  }
 
-  // 多来源合并后插入顺序不再是时间顺序，必须按排序结果同步重排 items，
-  // 否则 times 与 items 的下标会错位
-  var sorted = new Array(order.length);
-  var times = new Array(order.length);
-  for (var k = 0; k < order.length; k++) {
-    sorted[k] = slim[order[k][1]];
-    times[k] = order[k][0];
+  if (needSort) {
+    var order = new Array(times.length);
+    for (var r = 0; r < order.length; r++) order[r] = r;
+    order.sort(function (a, b) { return times[a] - times[b] || a - b; });
+
+    var si = new Array(order.length);
+    var st = new Array(order.length);
+    for (var k = 0; k < order.length; k++) {
+      si[k] = items[order[k]];
+      st[k] = times[order[k]];
+    }
+    items = si;
+    times = st;
   }
 
   return {
-    items: sorted,
+    items: items,
     times: times,
     total: rawList.length,
     dropped: dropped
