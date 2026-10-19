@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.9.7  当前版本。
+ *   2.9.8  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.9.7",
+  version: "2.9.8",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -106,13 +106,6 @@ WidgetMetadata = {
       id: "getComments",
       title: "获取弹幕",
       functionName: "getCommentsById",
-      type: "danmu",
-      params: []
-    },
-    {
-      id: "getDanmuWithSegmentTime",
-      title: "获取指定时刻弹幕",
-      functionName: "getDanmuWithSegmentTime",
       type: "danmu",
       params: []
     }
@@ -1840,9 +1833,9 @@ async function _danmuAt(params) {
 async function getCommentsById(params) {
   try {
     var list = await _danmuAt(params);
-    // 官方规范：弹幕响应是纯数组 [{p, m, cid}]，不要包 {count, comments}。
-    // 包裹对象会让 Forward 解析失败，进而认为本次选择无效。
-    return list;
+    // 与官方 widgets/danmu.js 一致：原样返回服务端响应结构 { count, comments }。
+    // Forward 内置解析器认识这个结构（它比纯数组更明确，不会被误判为分段模式）。
+    return { count: list.length, comments: list };
   } catch (e) {
     console.error(TAG, "getCommentsById 失败", e);
     throw e;
@@ -1858,7 +1851,7 @@ async function getCommentsById(params) {
 async function getDanmuWithSegmentTime(params) {
   try {
     var list = await _danmuAt(params);
-    return list;
+    return { count: list.length, comments: list };
   } catch (e) {
     console.error(TAG, "getDanmuWithSegmentTime 失败", e);
     throw e;
