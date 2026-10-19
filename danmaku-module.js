@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.9.5  当前版本。
+ *   2.9.6  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -30,8 +30,8 @@
 
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
-  title: "江砚弹幕 v2.9.5",
-  version: "2.9.5",
+  title: "江砚弹幕",
+  version: "2.9.6",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -46,6 +46,41 @@ WidgetMetadata = {
       placeholders: [
         { title: "示例 danmu_api", value: "https://{domain}/{token}" }
       ]
+    },
+    {
+      name: "mergeSources",
+      title: "合并弹幕来源数",
+      type: "input",
+      value: "3",
+      description: "合并多少个上游平台源，默认 3 个已覆盖绝大部分弹幕且最快；0=只取单一来源；调高会更全但更慢（每源整集 1~2MB）"
+    },
+    {
+      name: "segmentSeconds",
+      title: "分段时长(秒)",
+      type: "input",
+      value: "180",
+      description: "每次向客户端返回的弹幕时间窗口长度，300 秒以上更省请求"
+    },
+    {
+      name: "segmentPad",
+      title: "分段前向重叠(秒)",
+      type: "input",
+      value: "3",
+      description: "窗口起点向前多取几秒，避免边界弹幕丢失"
+    },
+    {
+      name: "cacheHours",
+      title: "缓存时长(小时)",
+      type: "input",
+      value: "24",
+      description: "分集列表与整集弹幕的本地缓存有效期"
+    },
+    {
+      name: "maxCachedEpisodes",
+      title: "最多缓存集数",
+      type: "input",
+      value: "5",
+      description: "整集弹幕缓存条数上限，超出淘汰最久未使用的（每集约 0.5~1MB）"
     }
   ],
 
@@ -546,6 +581,13 @@ function _rank(animes, ctx) {
     var ec = parseInt(a.episodeCount, 10);
     if (isFinite(ec) && ec > 0) s += Math.min(50, Math.round(Math.log(ec + 1) * 12));
 
+    // 8.1) 集数不足以覆盖当前集 → 降权但不剔除。
+    //      播放第 128 集时，18 集的「合集篇」根本不包含这一集。
+    if (isFinite(ec) && ec > 0 && ctx.episode) {
+      var needEp = parseInt(ctx.episode, 10);
+      if (isFinite(needEp) && needEp > 1 && ec < needEp) s -= 60;
+    }
+
     // 9) 来源：官方播放平台源优先，聚合源次之
     // 官方播放平台（B站/腾讯/优酷/爱奇艺/芒果）优先于聚合源。
     // 40 分足够压过 dandan 的评分+收藏加成，但小于「本体 vs 衍生」的 45 分差，
@@ -636,20 +678,8 @@ async function searchDanmu(params) {
     // 季号冲突交给 _rank 的 -45 降权处理，完整版始终保留。
     var pool = rec.list;
 
-    // 集数不够的源直接剔除：播放第 213 集时，「完美世界 第一季」（78 集）
-    // 根本不含这一集，留在候选里只会让 Forward 选到它然后匹配失败。
-    var wantEp = parseInt(params.episode, 10);
-    if (isFinite(wantEp) && wantEp > 1) {
-      var enough = [];
-      for (var g = 0; g < pool.length; g++) {
-        var ec0 = parseInt(pool[g] && pool[g].episodeCount, 10);
-        if (!isFinite(ec0) || ec0 <= 0 || ec0 >= wantEp) enough.push(pool[g]);
-      }
-      if (enough.length && enough.length < pool.length) {
-        console.log(TAG, "剔除 " + (pool.length - enough.length) + " 个集数不足的源（需要第" + wantEp + "集）");
-        pool = enough;
-      }
-    }
+    // 集数不足的源不删除，只在 _rank 里降权。
+    // 实测：删掉候选后 Forward 反而不自动匹配了，完整列表更稳。
 
     // 类型表决：Forward 没给明确信号时，按候选中占多数的类型给弱偏好。
     // 同名真人剧和动漫并存时（凡人修仙传 2020 动画 vs 2025 电视剧），
@@ -674,7 +704,8 @@ async function searchDanmu(params) {
       liveHint: liveHint,
       link: params.link,
       year: _inferYear(params),
-      season: isFinite(parseInt(season, 10)) ? parseInt(season, 10) : null
+      season: isFinite(parseInt(season, 10)) ? parseInt(season, 10) : null,
+      episode: params.episode
     }) };
   } catch (e) {
     console.error(TAG, "searchDanmu 失败", e);
