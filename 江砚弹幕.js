@@ -20,6 +20,8 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
+ *   1.2.1  弹幕入口返回格式改为 {count, comments}，与 danmu_api 模块对齐。
+ *          此前返回裸数组，Forward 读 .count 为 undefined，弹幕数显示为 0。
  *   1.2.0  多来源合并不再被镜像源耗尽配额（qq/tencent 同上游 100% 重复，实测 14194/14194），
  *          改为只对"新增弹幕>0"的来源计数，3 个独立来源可达 26339 条而非 19895 条；
  *          修 mergeSources=0 被当无效值回退到默认 3；episodeId 404 时强刷分集重试；
@@ -36,7 +38,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "1.2.0",
+  version: "1.2.1",
   requiredVersion: "0.0.2",
   description: "通用弹幕",
   author: "江砚",
