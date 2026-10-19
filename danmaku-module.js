@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.9.3  当前版本。
+ *   2.9.4  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.9.3",
+  version: "2.9.4",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -73,9 +73,23 @@ WidgetMetadata = {
       functionName: "getCommentsById",
       type: "danmu",
       params: []
+    },
+    {
+      // 官方 danmu_api 也注册了这个模块。Forward 的自动匹配链路会用到它，
+      // 缺失时可能退化成"只能手动选择"。实现上直接复用整集全量返回。
+      id: "getDanmuWithSegmentTime",
+      title: "获取指定时刻弹幕",
+      functionName: "getDanmuWithSegmentTime",
+      type: "danmu",
+      params: []
     }
   ]
 };
+
+// Forward 的部分运行环境通过 window.WidgetMetadata 读取元数据
+if (typeof window !== "undefined") {
+  window.WidgetMetadata = WidgetMetadata;
+}
 
 // ============================ 常量 ============================
 
@@ -1801,3 +1815,18 @@ async function getCommentsById(params) {
   }
 }
 
+
+/**
+ * 分段接口：Forward 会带 segmentTime 调用。
+ * 服务端不支持按时间范围查询，这里直接返回整集全量，
+ * 保证无论 Forward 走哪条链路拿到的都是完整弹幕。
+ */
+async function getDanmuWithSegmentTime(params) {
+  try {
+    var list = await _danmuAt(params);
+    return { count: list.length, comments: list };
+  } catch (e) {
+    console.error(TAG, "getDanmuWithSegmentTime 失败", e);
+    throw e;
+  }
+}
