@@ -27,11 +27,11 @@
 
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
-  title: "LogVar 弹幕API",
+  title: "江砚弹幕",
   version: "1.0.0",
   requiredVersion: "0.0.2",
-  description: "LogVar 弹幕API（DandanPlay 兼容协议）分段弹幕，本地缓存 + 二分定位，快速精准。",
-  author: "zhiaon",
+  description: "江砚弹幕 - LogVar 弹幕API（DandanPlay 兼容协议）分段弹幕，本地缓存 + 二分定位，快速精准。",
+  author: "江砚",
   site: "https://vidm.zhiaon.top/nzhyddtld",
 
   globalParams: [
