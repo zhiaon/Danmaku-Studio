@@ -20,18 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   1.3.0  重命名 danmaku-module.js；site 改为 GitHub 仓库地址；参数描述通用化。
- *   1.2.3  弹幕服务器参数描述与占位符改为通用表述，不再限定 LogVar。
- *   1.2.2  移除 getDanmuWithSegmentTime 注册，使弹幕入口与 danmu_api 完全一致。
- *          此前 Forward 优先调用分段接口、每次只回 180 秒窗口弹幕，导致弹幕数远少于 danmu_api。
- *   1.2.1  弹幕入口返回格式改为 {count, comments}，与 danmu_api 模块对齐。
- *          此前返回裸数组，Forward 读 .count 为 undefined，弹幕数显示为 0。
- *   1.2.0  多来源合并不再被镜像源耗尽配额（qq/tencent 同上游 100% 重复，实测 14194/14194），
- *          改为只对"新增弹幕>0"的来源计数，3 个独立来源可达 26339 条而非 19895 条；
- *          修 mergeSources=0 被当无效值回退到默认 3；episodeId 404 时强刷分集重试；
- *          抽取 _danmuKey 让镜像检测与最终去重共用同一套键。
- *   1.1.0  首屏加速：透传 commentId 命中则跳过 match 反查（~4.5s → ~1s）。
- *   1.0.0  首个版本：分段加载 + 本地缓存 + 多来源合并。
+ *   1.4.0  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
