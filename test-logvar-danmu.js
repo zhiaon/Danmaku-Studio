@@ -133,8 +133,11 @@ const EP2 = { server: SERVER, seriesName: '鬼灭之刃 灶门炭治郎 立志�
   console.log('\n=== 5. 整集弹幕加载（match 现场换新鲜 ID）===');
   resetCalls();
   const t0 = Date.now();
-  const all = await getCommentsById({ ...EP, segmentTime: '0' });
+  const allRes = await getCommentsById({ ...EP, segmentTime: '0' });
+  const all = allRes.comments;
   console.log('  加载耗时 ' + (Date.now() - t0) + 'ms');
+  ok('返回 {count, comments} 对象', !!allRes && typeof allRes === 'object' && !Array.isArray(allRes) && Array.isArray(allRes.comments));
+  ok('count 与 comments.length 一致', allRes.count === allRes.comments.length, 'count=' + allRes.count);
   ok('全量返回非空', all.length > 0, all.length + ' 条');
   ok('条目格式 {p,m}', all.every(d => typeof d.p === 'string' && typeof d.m === 'string'), sample(all, 2));
   ok('已按时间升序', all.every((d, i) => i === 0 || parseFloat(all[i - 1].p) <= parseFloat(d.p)));
@@ -149,19 +152,19 @@ const EP2 = { server: SERVER, seriesName: '鬼灭之刃 灶门炭治郎 立志�
 
   console.log('\n=== 6. 分段接口：只回当前窗口 + 缓存零网络 ===');
   resetCalls();
-  const seg0 = await getDanmuWithSegmentTime({ ...EP, segmentTime: '0' });
+  const seg0 = (await getDanmuWithSegmentTime({ ...EP, segmentTime: '0' })).comments;
   ok('只含前 180 秒', seg0.length > 0 && seg0.every(d => parseFloat(d.p) < 180), seg0.length + ' 条');
   ok('分段数 < 全量数', seg0.length < all.length, seg0.length + ' < ' + all.length);
   resetCalls();
   const t1 = Date.now();
-  const seg0b = await getDanmuWithSegmentTime({ ...EP, segmentTime: '0' });
+  const seg0b = (await getDanmuWithSegmentTime({ ...EP, segmentTime: '0' })).comments;
   ok('缓存命中 0 次请求', httpCalls.length === 0);
   ok('分段查询耗时', (Date.now() - t1) < 50, (Date.now() - t1) + 'ms');
   ok('结果一致', JSON.stringify(seg0) === JSON.stringify(seg0b));
 
   console.log('\n=== 7. 时间点弹幕（播放进度推进）===');
   resetCalls();
-  const mid = await getDanmuWithSegmentTime({ ...EP, segmentTime: '900' });
+  const mid = (await getDanmuWithSegmentTime({ ...EP, segmentTime: '900' })).comments;
   ok('900s 窗口 [897,1080)', mid.every(d => { const t = parseFloat(d.p); return t >= 897 && t < 1080; }), mid.length + ' 条');
   console.log('  示例:', sample(mid, 3));
 
@@ -223,7 +226,7 @@ const EP2 = { server: SERVER, seriesName: '鬼灭之刃 灶门炭治郎 立志�
   console.log('\n=== 12. 失败冷却（上游 404 不炸播放）===');
   resetCalls();
   const dead = await getCommentsById({ server: SERVER, commentId: '99999999999', segmentTime: '0' });
-  ok('无效 commentId 返回空数组不抛错', Array.isArray(dead) && dead.length === 0, 'length=' + dead.length);
+  ok('无效 commentId 返回空弹幕不抛错', !!dead && dead.count === 0 && dead.comments.length === 0, 'count=' + dead.count);
   resetCalls();
   const dead2 = await getCommentsById({ server: SERVER, commentId: '99999999999', segmentTime: '0' });
   ok('冷却期内 0 次请求', httpCalls.length === 0, httpCalls.length + ' 次');
