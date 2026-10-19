@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.8.2  当前版本。
+ *   2.8.5  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.8.2",
+  version: "2.8.5",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -1546,15 +1546,41 @@ function _prefetchEpisode(params, epNo) {
  *
  * 返回约定：成功返回 rec；ID 失效 / 上游失效 / 该集没弹幕返回 null（上层转空数组）。
  */
+/** 这一集的逻辑标识：片名+季+集优先，其次 commentId，最后 tmdbId */
+function _episodeIdentity(params) {
+  var cands = _matchFilenames(params);
+  return cands.length ? cands[0]
+    : (params.commentId ? "id:" + params.commentId
+      : (params.tmdbId ? "tmdb:" + params.tmdbId + ":" + params.type : ""));
+}
+
+// 进行中的整集加载：预取与播放会并发请求同一集，合并成一次网络下载。
+// 之前两路各下 1~2MB，首播要等两份都回来。
+var _inflight = Object.create(null);
+
 async function _loadEpisode(params) {
+  var id = _episodeIdentity(params);
+  if (!id) throw new Error("无法确定弹幕标识（缺少 commentId 与片名/季/集）");
+  var running = _inflight[id];
+  if (running) {
+    console.log(TAG, "复用进行中的请求", id);
+    return running;
+  }
+  var task = _loadEpisodeInner(params);
+  _inflight[id] = task;
+  try {
+    return await task;
+  } finally {
+    delete _inflight[id];
+  }
+}
+
+async function _loadEpisodeInner(params) {
   var ttl = _num(params.cacheHours, DEFAULT_CACHE_HOURS) * 3600;
   var maxEp = Math.floor(_num(params.maxCachedEpisodes, DEFAULT_MAX_EPISODES));
 
   // 缓存键用"片名+季+集"的逻辑标识，不用易失效的 episodeId，缓存才能跨缓存淘汰继续有效
-  var cands = _matchFilenames(params);
-  var logical = cands.length ? cands[0]
-    : (params.commentId ? "id:" + params.commentId
-      : (params.tmdbId ? "tmdb:" + params.tmdbId + ":" + params.type : ""));
+  var logical = _episodeIdentity(params);
   if (!logical) throw new Error("无法确定弹幕标识（缺少 commentId 与片名/季/集）");
 
   var dk = K_COMMENT + _hash(logical);
@@ -1612,7 +1638,7 @@ async function _loadEpisode(params) {
   var merged = await _expandSources(params, _server(params), hit, realEp, globalNumbering);
   var n = merged.n || 1;
 
-  var idx = _buildIndex(merged.raw, n > 1);
+  var idx = _buildIndex(merged.raw, n > 1, n <= 1);
   if (idx.items.length === 0) {
     _markCooling(dk, "弹幕全部无效");
     return null;
@@ -1654,8 +1680,8 @@ function _danmuKey(d, loose) {
   if (typeof p === "number") p = String(p);
   if (typeof p !== "string") p = "";
 
-  var comma = p.indexOf(",");
-  var t = parseFloat(comma >= 0 ? p.slice(0, comma) : p);
+  // parseFloat 遇到逗号自动停止，省掉 indexOf + slice
+  var t = parseFloat(p);
   if (!isFinite(t)) return null;
 
   var m = d.m;
@@ -1664,9 +1690,10 @@ function _danmuKey(d, loose) {
   var text = m.trim();
   if (!text) return null;
 
+  // 整数键代替 toFixed 字符串：2 万条时这一步占去重耗时的六成以上
   return loose
-    ? (t.toFixed(1) + "|" + text)
-    : (t.toFixed(3) + "|" + p + "|" + m);
+    ? (Math.round(t * 10) + "\u0001" + text)
+    : (Math.round(t * 1000) + "\u0001" + p + "\u0001" + m);
 }
 
 /**
@@ -1676,9 +1703,9 @@ function _danmuKey(d, loose) {
  *   - 只保留 {p,m,cid}，去掉 t/like 等客户端不需要的字段
  * 排序用 时间→原始顺序 双键稳定排序，同时间戳弹幕先后不乱。
  */
-function _buildIndex(rawList, loose) {
-  var slim = [];
-  var order = [];       // [time, originalIndex]
+function _buildIndex(rawList, loose, skipDedup) {
+  var items = [];
+  var times = [];
   var seen = Object.create(null);
   var dropped = 0;
 
@@ -1686,17 +1713,23 @@ function _buildIndex(rawList, loose) {
     var d = rawList[i];
     if (!d) { dropped++; continue; }
 
-    var key = _danmuKey(d, loose);
-    if (key === null) { dropped++; continue; }
-    if (seen[key]) { dropped++; continue; }
-    seen[key] = 1;
+    var m0 = d.m;
+    if (m0 === undefined || m0 === null) m0 = "";
+    else if (typeof m0 !== "string") m0 = String(m0);
+    if (!m0.trim()) { dropped++; continue; }
+
+    if (!skipDedup) {
+      var key = _danmuKey(d, loose);
+      if (key === null) { dropped++; continue; }
+      if (seen[key]) { dropped++; continue; }
+      seen[key] = 1;
+    }
 
     var p = d.p;
-    if (typeof p === "number") p = String(p);
-    if (typeof p !== "string") p = "";
-
+    if (typeof p !== "string") p = String(p === undefined || p === null ? "" : p);
     var comma = p.indexOf(",");
-    var t = parseFloat(comma >= 0 ? p.slice(0, comma) : p);
+    // parseFloat 直接吃 "45.65,1,16776960,[bilibili1]"，省掉 slice 拷贝
+    var t = parseFloat(p);
 
     var m = d.m;
     if (m === undefined || m === null) m = "";
@@ -1704,23 +1737,33 @@ function _buildIndex(rawList, loose) {
 
     var item = { p: p, m: m };
     if (d.cid !== undefined && d.cid !== null) item.cid = d.cid;
-    slim.push(item);
-    order.push([t, slim.length - 1]);
+    items.push(item);
+    times.push(t);
   }
 
-  order.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+  // 单源本身就是时间顺序，只有多源合并且出现逆序时才需要重排
+  var needSort = false;
+  for (var q = 1; q < times.length; q++) {
+    if (times[q] < times[q - 1]) { needSort = true; break; }
+  }
 
-  // 多来源合并后插入顺序不再是时间顺序，必须按排序结果同步重排 items，
-  // 否则 _sliceWindow 用 times 的下标去切 items 就会整体错位
-  var sorted = new Array(order.length);
-  var times = new Array(order.length);
-  for (var k = 0; k < order.length; k++) {
-    sorted[k] = slim[order[k][1]];
-    times[k] = order[k][0];
+  if (needSort) {
+    var order = new Array(times.length);
+    for (var r = 0; r < order.length; r++) order[r] = r;
+    order.sort(function (a, b) { return times[a] - times[b] || a - b; });
+
+    var si = new Array(order.length);
+    var st = new Array(order.length);
+    for (var k = 0; k < order.length; k++) {
+      si[k] = items[order[k]];
+      st[k] = times[order[k]];
+    }
+    items = si;
+    times = st;
   }
 
   return {
-    items: sorted,
+    items: items,
     times: times,
     total: rawList.length,
     dropped: dropped
