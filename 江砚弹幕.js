@@ -19,6 +19,14 @@
  *   7) 弹幕侧剔除 空文本 / 时间不可解析 / (时间+参数+文本) 完全重复 的脏数据；
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
+ * 版本记录
+ *   1.2.0  多来源合并不再被镜像源耗尽配额（qq/tencent 同上游 100% 重复，实测 14194/14194），
+ *          改为只对"新增弹幕>0"的来源计数，3 个独立来源可达 26339 条而非 19895 条；
+ *          修 mergeSources=0 被当无效值回退到默认 3；episodeId 404 时强刷分集重试；
+ *          抽取 _danmuKey 让镜像检测与最终去重共用同一套键。
+ *   1.1.0  首屏加速：透传 commentId 命中则跳过 match 反查（~4.5s → ~1s）。
+ *   1.0.0  首个版本：分段加载 + 本地缓存 + 多来源合并。
+ *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
  */
@@ -28,7 +36,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "1.0.0",
+  version: "1.2.0",
   requiredVersion: "0.0.2",
   description: "通用弹幕",
   author: "江砚",
@@ -170,6 +178,12 @@ function _cfg(params, name, fallback) {
 function _num(v, fallback) {
   var n = parseFloat(v);
   return isFinite(n) && n > 0 ? n : fallback;
+}
+
+// _num 把 0 当无效值回退默认，但 mergeSources=0 明确表示"单一来源"，必须真返回 0
+function _numAllowZero(v, fallback) {
+  var n = parseFloat(v);
+  return isFinite(n) && n >= 0 ? n : fallback;
 }
 
 /** 服务器基地址，去掉尾部斜杠，防双重斜杠导致 404 */
@@ -743,10 +757,10 @@ async function _cachedSearchList(params, keyword) {
   }
 }
 
-/** 分集列表（带缓存） */
-async function _cachedBangumi(params, animeId) {
+/** 分集列表（带缓存）。force=true 忽略缓存强刷 —— episodeId 会随上游缓存淘汰失效 */
+async function _cachedBangumi(params, animeId, force) {
   var key = K_BANGUMI + animeId;
-  var rec = _scache(key, _num(params.cacheHours, DEFAULT_CACHE_HOURS) * 3600);
+  var rec = force ? null : _scache(key, _num(params.cacheHours, DEFAULT_CACHE_HOURS) * 3600);
   if (rec && Array.isArray(rec.episodes)) return rec.episodes;
   try {
     var data = _unwrap(
@@ -778,7 +792,8 @@ async function _cachedBangumi(params, animeId) {
  * 缓存里已有的条目会被跳过，所以重复播放不会重复请求。
  */
 async function _expandSources(params, server, seed) {
-  var limit = Math.floor(_num(params.mergeSources, DEFAULT_MERGE_SOURCES));
+  // mergeSources=0 明确表示"单一来源"，必须真返回 0；用 _num 会被当成无效值回退到默认 3
+  var limit = Math.floor(_numAllowZero(params.mergeSources, DEFAULT_MERGE_SOURCES));
   if (limit < 0) limit = 0;
   if (limit > MERGE_HARD_LIMIT) limit = MERGE_HARD_LIMIT;
   if (limit <= 1 || !seed) return { raw: seed ? seed.raw : [], n: 1 };
@@ -793,9 +808,19 @@ async function _expandSources(params, server, seed) {
   var season = (params.season !== undefined && params.season !== null) ? String(params.season) : "";
 
   var all = seed.raw.slice();
-  var got = 1;
+  var got = 1;                 // 有效来源数（含 seed），镜像不计入
   var used = {};
   if (seed.title) used[seed.title] = 1;
+
+  // 镜像检测：qq 与 tencent 上游同源，同一集弹幕 100% 重复（实测 14194/14194）。
+  // 旧逻辑按"取到的来源数"计 limit，镜像吃掉配额就把真正的增量来源挡在门外——
+  // dandan 那 6444 条因此永远取不到。这里只对"新增弹幕 > 0"的来源计数，
+  // limit 才等于用户实际想要的"独立平台数"。
+  var seen = Object.create(null);
+  for (var s = 0; s < seed.raw.length; s++) {
+    var sk = _danmuKey(seed.raw[s], true);
+    if (sk !== null) seen[sk] = 1;
+  }
 
   var list = await _cachedSearchList(params, base);
   for (var i = 0; i < list.length && got < limit; i++) {
@@ -807,23 +832,54 @@ async function _expandSources(params, server, seed) {
     if (isFinite(sn) && sn > 0 && !_seasonHit(a, season)) continue;   // 必须是同一季
 
     var eps = await _cachedBangumi(params, String(a.animeId));
-    if (!eps || !eps.length) continue;
-    var ep = null;
-    for (var j = 0; j < eps.length; j++) {
-      if (String(eps[j].episodeNumber) === String(epNo)) { ep = eps[j]; break; }
-    }
-    if (!ep || !ep.episodeId) continue;
+    var ep = _pickEpisode(eps, epNo);
+    if (!ep) continue;
 
-    var raw = await _fetchRaw(params, server, String(ep.episodeId));
+    var id = String(ep.episodeId);
+    var raw = await _fetchRaw(params, server, id);
+
+    // episodeId 是上游缓存的临时编号，被淘汰后立刻 404。
+    // 不重试的话该来源会被旧 ID 卡死，整个合并阶段反复撞墙拿不到任何弹幕。
+    if (!raw) {
+      eps = await _cachedBangumi(params, String(a.animeId), true);
+      var fresh = _pickEpisode(eps, epNo);
+      if (fresh && String(fresh.episodeId) !== id) {
+        raw = await _fetchRaw(params, server, String(fresh.episodeId));
+      }
+    }
     if (!raw) continue;
-    for (var k = 0; k < raw.length; k++) all.push(raw[k]);
+
     used[at] = 1;
+    var added = 0;
+    for (var k = 0; k < raw.length; k++) {
+      var key = _danmuKey(raw[k], true);
+      if (key === null || seen[key]) continue;
+      seen[key] = 1;
+      all.push(raw[k]);
+      added++;
+    }
+
+    if (added === 0) {
+      console.log(TAG, "跳过镜像来源 [" + at + "]，" + raw.length + " 条全部重复");
+      continue;
+    }
+
     got++;
-    console.log(TAG, "合并来源 " + got + "/" + limit, "[" + at + "] +" + raw.length);
+    console.log(TAG, "合并来源 " + got + "/" + limit, "[" + at + "] +" + added + "/" + raw.length);
   }
 
-  if (got > 1) console.log(TAG, "多来源合并完成，" + got + " 个来源共 " + all.length + " 条（待去重）");
+  if (got > 1) console.log(TAG, "多来源合并完成，" + got + " 个有效来源共 " + all.length + " 条（待去重）");
   return { raw: all, n: got };
+}
+
+/** 从分集列表里挑出指定集号的条目 */
+function _pickEpisode(eps, epNo) {
+  if (!eps || !eps.length) return null;
+  var want = String(epNo);
+  for (var j = 0; j < eps.length; j++) {
+    if (String(eps[j].episodeNumber) === want && eps[j].episodeId) return eps[j];
+  }
+  return null;
 }
 
 /**
@@ -900,6 +956,32 @@ async function _loadEpisode(params) {
 }
 
 /**
+ * 弹幕去重键。两处必须用同一个：合并时的镜像检测 与 最终 _buildIndex 去重。
+ * loose=true（多来源）：时间收敛到 0.1 秒。跨平台的同一条弹幕 color/cid/平台标记全不同，
+ *                        只有文本和时间能对齐；0.1 秒容差吸收各平台的时间码偏差。
+ * loose=false（单来源）：时间精确到毫秒 + 完整参数串 + 文本，绝不误杀"哈哈哈"连发。
+ */
+function _danmuKey(d, loose) {
+  var p = d.p;
+  if (typeof p === "number") p = String(p);
+  if (typeof p !== "string") p = "";
+
+  var comma = p.indexOf(",");
+  var t = parseFloat(comma >= 0 ? p.slice(0, comma) : p);
+  if (!isFinite(t)) return null;
+
+  var m = d.m;
+  if (m === undefined || m === null) m = "";
+  else if (typeof m !== "string") m = String(m);
+  var text = m.trim();
+  if (!text) return null;
+
+  return loose
+    ? (t.toFixed(1) + "|" + text)
+    : (t.toFixed(3) + "|" + p + "|" + m);
+}
+
+/**
  * 把服务端弹幕数组压成"瘦条目 + 排序时间数组"，一次性完成三件事：
  *   - 剔除 空文本 / 时间不可解析 的脏弹幕
  *   - 剔除 (时间+参数+文本) 完全重复的多源重复弹幕
@@ -916,27 +998,21 @@ function _buildIndex(rawList, loose) {
     var d = rawList[i];
     if (!d) { dropped++; continue; }
 
+    var key = _danmuKey(d, loose);
+    if (key === null) { dropped++; continue; }
+    if (seen[key]) { dropped++; continue; }
+    seen[key] = 1;
+
     var p = d.p;
     if (typeof p === "number") p = String(p);
     if (typeof p !== "string") p = "";
 
     var comma = p.indexOf(",");
     var t = parseFloat(comma >= 0 ? p.slice(0, comma) : p);
-    if (!isFinite(t)) { dropped++; continue; }
 
     var m = d.m;
     if (m === undefined || m === null) m = "";
     else if (typeof m !== "string") m = String(m);
-    if (!m.trim()) { dropped++; continue; }
-
-    // 单来源：时间精确到毫秒 + 完整参数串 + 文本，安全不误杀"哈哈哈"连发
-    // 多来源合并：同一条弹幕在不同平台会带不同 color/cid/平台标记，
-    //             必须按 0.1 秒 + 文本 收敛，跨平台重复才真正去得掉
-    var dk = loose
-      ? (t.toFixed(1) + "|" + m.trim())
-      : (t.toFixed(3) + "|" + p + "|" + m);
-    if (seen[dk]) { dropped++; continue; }
-    seen[dk] = 1;
 
     var item = { p: p, m: m };
     if (d.cid !== undefined && d.cid !== null) item.cid = d.cid;
@@ -946,11 +1022,17 @@ function _buildIndex(rawList, loose) {
 
   order.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
 
+  // 多来源合并后插入顺序不再是时间顺序，必须按排序结果同步重排 items，
+  // 否则 _sliceWindow 用 times 的下标去切 items 就会整体错位
+  var sorted = new Array(order.length);
   var times = new Array(order.length);
-  for (var k = 0; k < order.length; k++) times[k] = order[k][0];
+  for (var k = 0; k < order.length; k++) {
+    sorted[k] = slim[order[k][1]];
+    times[k] = order[k][0];
+  }
 
   return {
-    items: slim,
+    items: sorted,
     times: times,
     total: rawList.length,
     dropped: dropped
@@ -1000,10 +1082,20 @@ async function _segmentContext(params) {
   return { seg: seg, pad: pad, win: _window(params.segmentTime, seg, pad) };
 }
 
-/** 统一出口：加载整集 → 切窗口。上游失效时返回空数组，不阻断播放 */
-async function _danmuAt(params) {
+/**
+ * 统一出口：加载整集。
+ * full=true 回整集弹幕（getComments 用），否则只回 segmentTime 所在窗口（分段接口用）。
+ * 上游失效时返回空数组，不阻断播放。
+ */
+async function _danmuAt(params, full) {
   var rec = await _loadEpisode(params);
   if (!rec) return [];
+
+  if (full) {
+    console.log(TAG, "commentId=" + rec.commentId, "全量返回", rec.items.length, "条");
+    return rec.items;
+  }
+
   var ctx = await _segmentContext(params);
   var list = _sliceWindow(rec, ctx.win);
   console.log(TAG, "commentId=" + rec.commentId,
@@ -1021,7 +1113,7 @@ async function _danmuAt(params) {
  */
 async function getCommentsById(params) {
   try {
-    return await _danmuAt(params);
+    return await _danmuAt(params, true);
   } catch (e) {
     console.error(TAG, "getCommentsById 失败", e);
     throw e;

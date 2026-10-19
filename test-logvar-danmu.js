@@ -64,8 +64,17 @@ global.Widget = {
 };
 
 // ---------- 加载模块 ----------
+// 兼容两种布局：开发时 ./widgets/江砚弹幕.js，发布仓库根目录 ./江砚弹幕.js
+// 旧别名 logvar-danmu.js 已废弃，仅作最后兜底
+const CANDIDATES = ['./widgets/江砚弹幕.js', './江砚弹幕.js', './widgets/logvar-danmu.js'];
+const MODULE_PATH = process.env.MODULE_PATH || CANDIDATES.find(function (p) { return fs.existsSync(p); });
+if (!MODULE_PATH) {
+  console.error('找不到模块文件，试过：' + CANDIDATES.join(', '));
+  process.exit(1);
+}
+console.log('加载模块：' + MODULE_PATH);
 global.WidgetMetadata = undefined;
-const code = fs.readFileSync('./widgets/logvar-danmu.js', 'utf8');
+const code = fs.readFileSync(MODULE_PATH, 'utf8');
 // eslint-disable-next-line no-eval
 eval(code);
 
@@ -124,20 +133,28 @@ const EP2 = { server: SERVER, seriesName: '鬼灭之刃 灶门炭治郎 立志�
   console.log('\n=== 5. 整集弹幕加载（match 现场换新鲜 ID）===');
   resetCalls();
   const t0 = Date.now();
-  const seg0 = await getCommentsById({ ...EP, segmentTime: '0' });
+  const all = await getCommentsById({ ...EP, segmentTime: '0' });
   console.log('  加载耗时 ' + (Date.now() - t0) + 'ms');
-  ok('第1段非空', seg0.length > 0, seg0.length + ' 条');
-  ok('条目格式 {p,m}', seg0.every(d => typeof d.p === 'string' && typeof d.m === 'string'), sample(seg0, 2));
-  ok('只含前 180 秒', seg0.every(d => parseFloat(d.p) < 180));
-  ok('跨桥体积 < 400KB', JSON.stringify(seg0).length < 400000, (JSON.stringify(seg0).length / 1024).toFixed(1) + 'KB');
-  ok('走了 match 反查', lastCalls(8).some(c => c.method === 'POST' && c.url.includes('/match')),
-    lastCalls(8).map(c => c.method).join(','));
+  ok('全量返回非空', all.length > 0, all.length + ' 条');
+  ok('条目格式 {p,m}', all.every(d => typeof d.p === 'string' && typeof d.m === 'string'), sample(all, 2));
+  ok('已按时间升序', all.every((d, i) => i === 0 || parseFloat(all[i - 1].p) <= parseFloat(d.p)));
+  ok('跨桥体积 < 3MB', JSON.stringify(all).length < 3145728, (JSON.stringify(all).length / 1024).toFixed(1) + 'KB');
+  // 多来源合并会让请求数远超 8（match×N + comment×3 + bangumi×3 + 重试），
+  // 所以扫全量而不是 lastCalls(8)
+  ok('走了 match 反查', httpCalls.some(c => c.method === 'POST' && c.url.includes('/match')),
+    httpCalls.map(c => c.method).join(','));
+  console.log('  有效弹幕: ' + all.length + ' 条，请求 ' + httpCalls.length + ' 次' +
+    '（POST ' + httpCalls.filter(c => c.method === 'POST').length + ' 次）');
   console.log('  请求链:', lastCalls(8).map(c => c.method + (c.url.split('/api/')[1] || '').split('?')[0] + ' ' + c.ms + 'ms').join('  '));
 
-  console.log('\n=== 6. 分段缓存：重复请求零网络开销 ===');
+  console.log('\n=== 6. 分段接口：只回当前窗口 + 缓存零网络 ===');
+  resetCalls();
+  const seg0 = await getDanmuWithSegmentTime({ ...EP, segmentTime: '0' });
+  ok('只含前 180 秒', seg0.length > 0 && seg0.every(d => parseFloat(d.p) < 180), seg0.length + ' 条');
+  ok('分段数 < 全量数', seg0.length < all.length, seg0.length + ' < ' + all.length);
   resetCalls();
   const t1 = Date.now();
-  const seg0b = await getCommentsById({ ...EP, segmentTime: '0' });
+  const seg0b = await getDanmuWithSegmentTime({ ...EP, segmentTime: '0' });
   ok('缓存命中 0 次请求', httpCalls.length === 0);
   ok('分段查询耗时', (Date.now() - t1) < 50, (Date.now() - t1) + 'ms');
   ok('结果一致', JSON.stringify(seg0) === JSON.stringify(seg0b));
@@ -174,11 +191,23 @@ const EP2 = { server: SERVER, seriesName: '鬼灭之刃 灶门炭治郎 立志�
     ok('5000 次窗口切片耗时', (Date.now() - perfT0) < 300, (Date.now() - perfT0) + 'ms');
   }
 
-  console.log('\n=== 10. 脏数据过滤统计 ===');
-  console.log('  原始 ' + full.total + ' → 有效 ' + full.items.length + '（丢弃 ' + full.dropped + '）');
-  ok('有效弹幕 > 90% 原始量', full.items.length > full.total * 0.9, (full.items.length / full.total * 100).toFixed(1) + '%');
+  console.log('\n=== 10. 去重统计（多来源合并 vs 单一来源）===');
+  console.log('  合并 ' + full.sources + ' 来源：原始 ' + full.total + ' → 有效 ' + full.items.length +
+    '（丢弃 ' + full.dropped + '，去重率 ' + (full.dropped / full.total * 100).toFixed(1) + '%）');
   ok('items/times 下标对齐', full.times.length === full.items.length &&
     full.times.every((t, i) => Math.abs(parseFloat(full.items[i].p) - t) < 1e-6));
+  // 去重率 >90% 只对单一来源成立；合并时跨平台重复会被合理丢弃，所以单独跑一次单一来源校验。
+  // 缓存键不含 mergeSources，必须先清掉整集缓存，否则拿到的还是合并结果
+  for (const k of Array.from(store.keys())) if (k.startsWith('zldm_cm_')) store.delete(k);
+  const single = await _loadEpisode({ ...EP, mergeSources: '0' });
+  console.log('  单一来源：原始 ' + single.total + ' → 有效 ' + single.items.length +
+    '（丢弃 ' + single.dropped + '，去重率 ' + (single.dropped / single.total * 100).toFixed(1) + '%）');
+  ok('单一来源有效弹幕 > 90% 原始量', single.items.length > single.total * 0.9,
+    (single.items.length / single.total * 100).toFixed(1) + '%');
+  ok('单一来源 items/times 下标对齐', single.times.length === single.items.length &&
+    single.times.every((t, i) => Math.abs(parseFloat(single.items[i].p) - t) < 1e-6));
+  ok('合并后条数 >= 单一来源（多来源确实更全）', full.items.length >= single.items.length,
+    full.items.length + ' >= ' + single.items.length);
 
   console.log('\n=== 11. 缓存淘汰 ===');
   const before = Array.from(store.keys()).filter(k => k.startsWith('zldm_cm_')).length;
