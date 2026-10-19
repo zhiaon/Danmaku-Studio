@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.0.0  当前版本。
+ *   2.0.1  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.0.0",
+  version: "2.0.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -136,6 +136,10 @@ var K_IDX = "zldm_idx";           // 缓存淘汰队列
 // 失败也缓存一小段时间，避免播放中反复撞墙刷请求；到期后自动重试。
 var K_FAIL = "zldm_fl_";
 var FAIL_TTL = 5 * 60;
+
+// 弹幕抓取逻辑版本。改动「抓取方式 / 去重规则 / 返回内容」时 +1，
+// 旧缓存会因版本不符自动失效并重新抓取，避免升级后仍显示老数据。
+var CACHE_VERSION = 2;
 
 // 实测结论：本服务的 episodeId 是"当前缓存"的临时编号，缓存淘汰后 ID 立刻失效（服务端日志：
 //   error: [cache] No URL found for ID: 13126 / [LogVar-API] Comment with ID 13126 not found）。
@@ -897,6 +901,12 @@ async function _loadEpisode(params) {
   }
 
   var rec = _scache(dk, ttl);
+  // 缓存版本不符（模块升级过抓取逻辑）→ 作废旧记录重新抓，否则会一直显示老数据
+  if (rec && rec.cv !== CACHE_VERSION) {
+    console.log(TAG, "缓存版本" + (rec.cv || "旧") + "≠" + CACHE_VERSION + "，作废重抓", logical);
+    _sdel(dk);
+    rec = null;
+  }
   if (rec && Array.isArray(rec.items) && Array.isArray(rec.times)) {
     console.log(TAG, "命中本地缓存", logical, rec.items.length, "条");
     _touch(dk, maxEp);   // 命中也更新访问时间，LRU 才准
@@ -928,6 +938,7 @@ async function _loadEpisode(params) {
   }
   rec = {
     t: _now(),
+    cv: CACHE_VERSION,
     commentId: hit.commentId,
     logical: logical,
     sources: n,

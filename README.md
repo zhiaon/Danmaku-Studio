@@ -41,4 +41,4 @@ https://raw.githubusercontent.com/zhiaon/jiangyan-danmu/main/danmaku-module.js
 
 ## 版本
 
-当前版本 **2.0.0**
+当前版本 **2.0.1**
