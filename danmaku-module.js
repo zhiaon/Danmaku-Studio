@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.2.0  当前版本。
+ *   2.3.0  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.2.0",
+  version: "2.3.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -139,7 +139,7 @@ var FAIL_TTL = 5 * 60;
 
 // 弹幕抓取逻辑版本。改动「抓取方式 / 去重规则 / 返回内容」时 +1，
 // 旧缓存会因版本不符自动失效并重新抓取，避免升级后仍显示老数据。
-var CACHE_VERSION = 4;
+var CACHE_VERSION = 5;
 
 // 实测结论：本服务的 episodeId 是"当前缓存"的临时编号，缓存淘汰后 ID 立刻失效（服务端日志：
 //   error: [cache] No URL found for ID: 13126 / [LogVar-API] Comment with ID 13126 not found）。
@@ -442,11 +442,26 @@ function _isJunk(anime) {
 /**
  * 搜索结果打分排序。
  * 目的：LogVar 会把 7 个源合并返回 40+ 条，顺序毫无意义，
- *      必须按"类型相符 → 标题精确 → 弹幕量 → 来源合并度 → 评分"排。
+ *      必须按"类型相符 → 标题精确 → 播放平台源 → 弹幕量 → 评分"排。
+ *
+ * ctx.live: true=真人剧 / false=动漫 / null=未判定
+ * ctx.link: 当前播放链接，用来抬高对应平台的官方源
  */
 function _rank(animes, ctx) {
   var wantMovie = ctx.type === "movie";
   var kw = ctx.keyword.toLowerCase();
+  var wantLive = (ctx.live === true || ctx.live === false) ? ctx.live : null;
+  var wantYear = ctx.year || null;
+  var link = String(ctx.link || "").toLowerCase();
+
+  // 播放链接对应的平台：在该平台播放，就优先该平台的官方弹幕
+  var platform = "";
+  if (link.indexOf("bilibili") >= 0) platform = "bilibili";
+  else if (link.indexOf("youku") >= 0) platform = "youku";
+  else if (link.indexOf("iqiyi") >= 0) platform = "iqiyi";
+  else if (link.indexOf("v.qq.com") >= 0 || link.indexOf("qq.com") >= 0) platform = "tencent";
+  else if (link.indexOf("mgtv") >= 0) platform = "mgtv";
+
   var scored = [];
   for (var i = 0; i < animes.length; i++) {
     var a = animes[i];
@@ -462,6 +477,16 @@ function _rank(animes, ctx) {
     if (wantMovie) s += movie ? 120 : -80;
     else s += movie ? -80 : 40;
 
+    // 动漫 / 真人剧：只在能判定时才加减分，判不出就保持中立
+    var live = _isLiveActionTitle(title);
+    if (wantLive !== null) s += (live === wantLive) ? 70 : -70;
+
+    // 年份：2020 动画与 2025 真人剧靠年份区分
+    if (wantYear) {
+      var ty = _titleYear(title);
+      if (ty) s += (Math.abs(ty - wantYear) <= 1) ? 40 : -40;
+    }
+
     // 标题质量
     if (kw) {
       if (low.indexOf(kw) >= 0) s += 60;
@@ -473,13 +498,16 @@ function _rank(animes, ctx) {
     var ec = parseInt(a.episodeCount, 10);
     if (isFinite(ec) && ec > 0) s += Math.min(50, Math.round(Math.log(ec + 1) * 12));
 
-    // 来源：bilibili 常为官方源优先；dandan/bahamut 合并源弹幕丰富；其余适中
-    if (src === "bilibili") s += 15;
-    else if (src.indexOf("dandan") >= 0 && src.indexOf("bahamut") >= 0) s += 15;
-    else if (src.indexOf("dandan") >= 0) s += 12;
-    else if (src === "bahamut") s += 12;
-    else if (src === "tencent" || src === "youku") s += 8;
+    // 来源：官方播放平台源优先，聚合源次之
+    if (src === "bilibili" || src === "youku" || src === "iqiyi" ||
+        src === "tencent" || src === "mgtv" || src === "qq") s += 18;
+    else if (src.indexOf("dandan") >= 0 && src.indexOf("bahamut") >= 0) s += 12;
+    else if (src.indexOf("dandan") >= 0) s += 10;
+    else if (src === "bahamut") s += 10;
     else s += 8;
+
+    // 正在该平台播放 → 该平台源再加一档，确保"播放平台源优先"
+    if (platform && src === platform) s += 25;
 
     // 评分
     var r = parseFloat(a.rating);
@@ -564,7 +592,13 @@ async function searchDanmu(params) {
       }
     }
 
-    return { animes: _rank(pool, { type: params.type, keyword: keyword }) };
+    return { animes: _rank(pool, {
+      type: params.type,
+      keyword: keyword,
+      live: _inferLiveAction(params),
+      link: params.link,
+      year: _inferYear(params)
+    }) };
   } catch (e) {
     console.error(TAG, "searchDanmu 失败", e);
     throw e;
@@ -749,12 +783,60 @@ async function _fetchRaw(params, server, commentId) {
 }
 
 /**
+ * 推断当前播放的是真人剧还是动漫。
+ * 返回 true=真人剧 / false=动漫 / null=判不出（交给评分决定，不硬过滤）。
+ */
+function _inferLiveAction(params) {
+  var hay = [params.title, params.seriesName, params.episodeName]
+    .filter(function (x) { return x !== undefined && x !== null && x !== ""; })
+    .join(" ");
+  if (/电视剧|真人版|真人剧/.test(hay)) return true;
+  if (/动漫|动画|番剧|3D网络放送/.test(hay)) return false;
+  return null;
+}
+
+/** 推断目标年份：标题里的年份 > params.year > params.releaseYear */
+function _inferYear(params) {
+  var y = _titleYear(params.title) || _titleYear(params.seriesName);
+  if (!y && params.year !== undefined && params.year !== null) y = parseInt(params.year, 10);
+  if (!y && params.releaseYear !== undefined && params.releaseYear !== null) y = parseInt(params.releaseYear, 10);
+  return (isFinite(y) && y > 1900) ? y : null;
+}
+
+/**
+ * 用 Forward 传的 commentId 反查它属于哪个条目、哪一集。
+ * 这是最可靠的信号：它直接告诉我们播放器实际选中的是动漫线还是真人剧线。
+ */
+async function _locateByCommentId(params, list, commentId) {
+  var cid = String(commentId || "");
+  if (!cid) return null;
+  var probes = 0;
+  for (var i = 0; i < list.length && probes < 10; i++) {
+    var a = list[i];
+    if (!a || !a.animeId) continue;
+    probes++;
+    var eps;
+    try { eps = await _cachedBangumi(params, String(a.animeId)); }
+    catch (e) { continue; }
+    for (var j = 0; j < eps.length; j++) {
+      if (eps[j] && String(eps[j].episodeId) === cid) {
+        return { anime: a, episode: eps[j] };
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * 用「搜索列表 + 真实集号」定位正确的集，返回主源。
  *
  * 为什么不直接信 Forward 传的 commentId：
  *   同名作品被上游拆成多个条目后，Forward 可能把「风起天南4」匹配成
  *   「凡人修仙传之凡人风起天南 贰」的 ep#4（实际是第12话），弹幕内容完全错位。
  *   这里按标题里的「第N话」对齐，跨条目也能拿到真正对应的那一集。
+ *
+ * 类型处理：动漫与真人剧的源都允许参与，但只在同一类型内匹配，
+ *          绝不把真人剧的弹幕混进动漫（反之亦然）。
  */
 async function _bestSourceBySearch(params, realEp) {
   var base = _keyword(params.seriesName || params.title || "");
@@ -769,18 +851,45 @@ async function _bestSourceBySearch(params, realEp) {
   var list = await _cachedSearchList(params, base);
   if (!list.length) return null;
 
-  var ranked = _rank(list, { type: params.type, keyword: base });
-  var seedTitle = String(params.seriesName || params.title || "");
-  var wantLive = _isLiveActionTitle(seedTitle);
-  var wantYear = _titleYear(String(params.title || "")) || _titleYear(String(params.seriesName || ""));
   var server = _server(params);
+  var passed = params.commentId ? String(params.commentId) : "";
+
+  // 1) 先反查 Forward 传的 commentId —— 确定类型，顺便判断集号对不对
+  var wantLive = null;
+  if (passed) {
+    var loc = await _locateByCommentId(params, list, passed);
+    if (loc) {
+      var at0 = String(loc.anime.animeTitle || "");
+      wantLive = _isLiveActionTitle(at0);
+      var real0 = _epRealNumber(loc.episode);
+      if (real0 === null || real0 === epNo) {
+        var raw0 = await _fetchRaw(params, server, passed);
+        if (raw0) {
+          console.log(TAG, "commentId 反查命中 [" + at0 + "] 集号" + (real0 === null ? "未知" : real0) + " → 直接使用");
+          return {
+            commentId: passed, raw: raw0, title: at0,
+            source: String(loc.anime.source || ""), live: wantLive
+          };
+        }
+      } else {
+        console.log(TAG, "commentId 反查：" + at0 + " 实为第" + real0 + "话 ≠ 请求第" + epNo + "话，按正确集号重新定位");
+      }
+    }
+  }
+
+  // 2) 判不出类型就退回标题推断
+  if (wantLive === null) wantLive = _inferLiveAction(params);
+
+  var wantYear = _inferYear(params);
+  var ranked = _rank(list, { type: params.type, keyword: base, live: wantLive, link: params.link, year: wantYear });
 
   for (var i = 0; i < ranked.length; i++) {
     var a = ranked[i];
     var at = String(a.animeTitle || "");
     if (at.indexOf(base) < 0) continue;
     if (_isJunk(a)) continue;
-    if (_isLiveActionTitle(at) !== wantLive) continue;
+    // 只在同类型内匹配：动漫用动漫的源，真人剧用真人剧的源
+    if (wantLive !== null && _isLiveActionTitle(at) !== wantLive) continue;
     var y = _titleYear(at);
     if (wantYear && y && Math.abs(y - wantYear) > 1) continue;
 
@@ -800,7 +909,8 @@ async function _bestSourceBySearch(params, realEp) {
       commentId: String(ep.episodeId),
       raw: raw,
       title: at,
-      source: String(a.source || "")
+      source: String(a.source || ""),
+      live: wantLive
     };
   }
   return null;
@@ -938,10 +1048,12 @@ async function _expandSources(params, server, seed, realEp) {
   var list = await _cachedSearchList(params, base);
 
   // 同名作品判定：动画版与真人版共享片名，弹幕完全不能混。
-  // seed 的标题（match 拿到的）优先；拿不到就看 Forward 传的 title/seriesName。
+  // seed.live 由 commentId 反查得出（最准）；拿不到再看标题/参数。
   var seedTitle = String(seed.title || params.seriesName || params.title || "");
-  var wantLive = _isLiveActionTitle(seedTitle);
-  var wantYear = _titleYear(seedTitle) || _titleYear(params.title) || _titleYear(params.seriesName);
+  var wantLive = (seed.live === true || seed.live === false)
+    ? seed.live
+    : _isLiveActionTitle(seedTitle);
+  var wantYear = _inferYear(params) || _titleYear(seedTitle);
   var probes = 0;              // 已探测的条目数，防止搜索列表很长时无限请求
   var MAX_PROBE = 24;
 
@@ -958,7 +1070,7 @@ async function _expandSources(params, server, seed, realEp) {
 
     // 动画 ≠ 真人剧：凡人修仙传 2020 动画 与 2025 电视剧是两部作品
     var live = _isLiveActionTitle(at);
-    if (live !== wantLive) continue;
+    if (wantLive !== null && live !== wantLive) continue;
 
     // 年份：双方都有年份且不同，判为不同作品（重映/续作另算，这里保守跳过）
     var y = _titleYear(at);
