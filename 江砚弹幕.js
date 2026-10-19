@@ -20,6 +20,8 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
+ *   1.2.2  移除 getDanmuWithSegmentTime 注册，使弹幕入口与 danmu_api 完全一致。
+ *          此前 Forward 优先调用分段接口、每次只回 180 秒窗口弹幕，导致弹幕数远少于 danmu_api。
  *   1.2.1  弹幕入口返回格式改为 {count, comments}，与 danmu_api 模块对齐。
  *          此前返回裸数组，Forward 读 .count 为 undefined，弹幕数显示为 0。
  *   1.2.0  多来源合并不再被镜像源耗尽配额（qq/tencent 同上游 100% 重复，实测 14194/14194），
@@ -38,7 +40,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "1.2.1",
+  version: "1.2.2",
   requiredVersion: "0.0.2",
   description: "通用弹幕",
   author: "江砚",
@@ -115,14 +117,6 @@ WidgetMetadata = {
       id: "getComments",
       title: "获取弹幕",
       functionName: "getCommentsById",
-      type: "danmu",
-      params: []
-    },
-    {
-      // id 固定，播放进度推进时按时刻取分段弹幕
-      id: "getDanmuWithSegmentTime",
-      title: "获取指定时刻弹幕",
-      functionName: "getDanmuWithSegmentTime",
       type: "danmu",
       params: []
     }

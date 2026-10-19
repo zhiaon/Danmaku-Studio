@@ -101,7 +101,7 @@ const EP2 = { server: SERVER, seriesName: '鬼灭之刃 灶门炭治郎 立志�
   ok('id 存在', !!M.id);
   ok('requiredVersion', M.requiredVersion === '0.0.2', M.requiredVersion);
   const ids = M.modules.map(m => m.id).join(',');
-  ok('模块 id 齐全', ['searchDanmu', 'getDetail', 'getComments', 'getDanmuWithSegmentTime'].every(i => ids.includes(i)), ids);
+  ok('模块 id 齐全', ['searchDanmu', 'getDetail', 'getComments'].every(i => ids.includes(i)), ids);
   ok('全部 type=danmu', M.modules.every(m => m.type === 'danmu'));
   ok('函数已定义', ['searchDanmu', 'getDetailById', 'getCommentsById', 'getDanmuWithSegmentTime'].every(f => typeof eval(f) === 'function'));
   ok('globalParams 数量', M.globalParams.length >= 3, M.globalParams.map(p => p.name).join(','));
