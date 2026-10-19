@@ -1,7 +1,7 @@
 /**
  * 江砚弹幕模块（DandanPlay v2 兼容协议）
  *
- * 数据源: https://vidm.zhiaon.top/nzhyddtld
+ * 数据源: 由「弹幕服务器」参数指定（DandanPlay v2 兼容协议，如 danmu_api 自部署实例）
  *   GET  /api/v2/search/anime?keyword=<kw>        搜索番剧
  *   GET  /api/v2/bangumi/:animeId                 分集列表
  *   GET  /api/v2/comment/:commentId?format=json   整集弹幕
@@ -42,7 +42,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "1.3.3",
+  version: "1.4.0",
   requiredVersion: "0.0.2",
   description: "通用弹幕",
   author: "江砚",
@@ -126,7 +126,6 @@ WidgetMetadata = {
 // ============================ 常量 ============================
 
 var TAG = "[LogVarDanmu]";
-var DEFAULT_SERVER = "https://vidm.zhiaon.top/nzhyddtld";
 var DEFAULT_SEGMENT = 180;
 var DEFAULT_PAD = 3;
 var DEFAULT_CACHE_HOURS = 24;
@@ -182,10 +181,16 @@ function _numAllowZero(v, fallback) {
   return isFinite(n) && n >= 0 ? n : fallback;
 }
 
-/** 服务器基地址，去掉尾部斜杠，防双重斜杠导致 404 */
+/**
+ * 服务器基地址，去掉尾部斜杠，防双重斜杠导致 404。
+ * 必须在「弹幕服务器」参数里填写，模块不内置任何默认服务器。
+ */
 function _server(params) {
-  var s = String(_cfg(params, "server", DEFAULT_SERVER) || DEFAULT_SERVER).trim();
+  var s = String(_cfg(params, "server", "") || "").trim();
   while (s.length > 0 && s.charAt(s.length - 1) === "/") s = s.slice(0, -1);
+  if (!s) {
+    throw new Error("未配置弹幕服务器：请在模块设置的「弹幕服务器」里填写 API 地址");
+  }
   return s;
 }
 
