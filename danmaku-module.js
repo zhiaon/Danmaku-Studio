@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.6.0  当前版本。
+ *   2.7.0  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.6.0",
+  version: "2.7.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -51,8 +51,8 @@ WidgetMetadata = {
       name: "mergeSources",
       title: "合并弹幕来源数",
       type: "input",
-      value: "10",
-      description: "同一集合并多少个上游平台的弹幕，默认 10 = 全部可抓来源（含 B站/优酷/腾讯/爱奇艺/弹弹等）；0 表示只取单一来源(最快)"
+      value: "3",
+      description: "合并多少个上游平台源，默认 3 个已覆盖绝大部分弹幕且最快；0=只取单一来源；调高会更全但更慢（每源整集 1~2MB）"
     },
     {
       name: "segmentSeconds",
@@ -119,7 +119,7 @@ var DEFAULT_SEGMENT = 180;
 var DEFAULT_PAD = 3;
 var DEFAULT_CACHE_HOURS = 24;
 var DEFAULT_MAX_EPISODES = 5;
-var DEFAULT_MERGE_SOURCES = 10;   // 同一集合并的上游平台数，默认全抓；0 = 单一来源
+var DEFAULT_MERGE_SOURCES = 3;   // 同一集合并的上游平台数，默认 3；0 = 单一来源
 var MERGE_HARD_LIMIT = 12;        // 无论用户填多少，最多合并 12 个来源
 var SEARCH_CACHE_HOURS = 12;      // 搜索关键词结果缓存（与整集缓存分开，更宽松）
 var SEARCH_TOP_N = 30;            // 搜索结果最多返回条数
@@ -139,7 +139,7 @@ var FAIL_TTL = 5 * 60;
 
 // 弹幕抓取逻辑版本。改动「抓取方式 / 去重规则 / 返回内容」时 +1，
 // 旧缓存会因版本不符自动失效并重新抓取，避免升级后仍显示老数据。
-var CACHE_VERSION = 8;
+var CACHE_VERSION = 9;
 
 // 实测结论：本服务的 episodeId 是"当前缓存"的临时编号，缓存淘汰后 ID 立刻失效（服务端日志：
 //   error: [cache] No URL found for ID: 13126 / [LogVar-API] Comment with ID 13126 not found）。
@@ -402,6 +402,16 @@ function _hasLangTag(t) {
     if (hay.indexOf(LANG_WORDS[i]) >= 0) return true;
   }
   return false;
+}
+
+/** 标题归一化：去掉年份/类型标签/来源标记，用于识别同一部剧在不同平台的镜像条目 */
+function _normTitle(t) {
+  return String(t || "")
+    .replace(/from\s+[a-z0-9&._\-]+/gi, "")
+    .replace(/[（(]\s*(?:19|20)\d{2}\s*[)）]/g, "")
+    .replace(/【[^】]*】/g, "")
+    .replace(/\s+/g, "")
+    .trim();
 }
 
 /** 标题里的年份：凡人修仙传(2020)【动漫】 → 2020 */
@@ -973,6 +983,25 @@ function _seasonConflict(title, eps, season) {
  * 所以这里不取"第一个命中的"，而是把候选全取一遍再比数量。
  * 每个来源只请求一次，取到的原始弹幕随返回值交给合并阶段复用，不重复下载。
  */
+/** 并发上限控制：并行执行 fn，同时最多 limit 个 */
+async function _mapLimit(items, limit, fn) {
+  var out = new Array(items.length);
+  var idx = 0;
+  async function worker() {
+    while (true) {
+      var i = idx++;
+      if (i >= items.length) return;
+      try { out[i] = await fn(items[i], i); }
+      catch (e) { out[i] = null; }
+    }
+  }
+  var ws = [];
+  var n = Math.min(limit, items.length);
+  for (var w = 0; w < n; w++) ws.push(worker());
+  await Promise.all(ws);
+  return out;
+}
+
 async function _collectPrimarySources(params, realEp, globalNumbering) {
   var base = _keyword(params.seriesName || params.title || "");
   if (!base) base = _keyword(params.episodeName || "");
@@ -994,7 +1023,8 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
   var seasonNum = parseInt(seasonRaw, 10);
   if (!isFinite(seasonNum) || seasonNum <= 0) seasonNum = null;
 
-  // 1) 反查 Forward 传的 commentId —— 最可靠地确定"这是动漫还是真人剧"
+  // ---- 1) 先定类型：异类型的源连请求都不发 ----
+  // 真人剧的整集弹幕有 1.3MB，判错类型会让首次加载多花十几秒。
   var wantLive = null;
   if (passed) {
     var loc = await _locateByCommentId(params, list, passed);
@@ -1008,83 +1038,116 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
           tried[passed] = 1;
           out.push({
             commentId: passed, raw: raw0, title: at0,
-            source: String(loc.anime.source || ""), live: wantLive
+            source: String(loc.anime.source || ""), live: wantLive,
+            epCount: 0, globalNum: false
           });
           console.log(TAG, "commentId 反查命中 [" + at0 + "] " + raw0.length + " 条");
         }
       } else {
-        console.log(TAG, "commentId 反查：" + at0 + " 实为第" + real0 + "话 ≠ 请求第" + epNo + "话，按正确集号重新定位");
+        console.log(TAG, "commentId 反查：" + at0 + " 实为第" + real0 + "话 ≠ 请求第" + epNo + "话，重新定位");
       }
     }
   }
-
-  // 2) 判不出类型就退回标题推断
   if (wantLive === null) wantLive = _inferLiveAction(params);
+  if (wantLive === null) {
+    var lc = 0, ac = 0;
+    for (var v = 0; v < list.length; v++) {
+      var vt = String((list[v] && list[v].animeTitle) || "");
+      if (vt.indexOf(base) < 0) continue;
+      if (_isLiveActionTitle(vt)) lc++; else ac++;
+    }
+    if (lc > 0 && ac > 0) wantLive = lc > ac;
+  }
+  console.log(TAG, "类型判定：" + (wantLive === null ? "未定" : (wantLive ? "真人剧" : "动漫")));
 
-  var wantYear = _inferYear(params);
+  // ---- 2) 粗筛：纯本地规则，不发请求 ----
   var ranked = _rank(list, {
-    type: params.type, keyword: base, live: wantLive, link: params.link, year: wantYear,
-    season: seasonNum
+    type: params.type, keyword: base, live: wantLive, link: params.link,
+    year: _inferYear(params), season: seasonNum
   });
-  var probes = 0;
-  var MAX_PROBE = 12;
-
-  for (var i = 0; i < ranked.length && probes < MAX_PROBE; i++) {
+  var wantYear = _inferYear(params);
+  var probeList = [];
+  var wantLimit = Math.floor(_numAllowZero(params.mergeSources, DEFAULT_MERGE_SOURCES));
+  if (!(wantLimit >= 1)) wantLimit = 1;
+  if (wantLimit > MERGE_HARD_LIMIT) wantLimit = MERGE_HARD_LIMIT;
+  var maxProbe = Math.min(wantLimit, 6);
+  for (var i = 0; i < ranked.length && probeList.length < maxProbe; i++) {
     var a = ranked[i];
     var at = String(a.animeTitle || "");
     if (at.indexOf(base) < 0) continue;
     if (_isJunk(a)) continue;
-    // 剧场版/电影与剧集是两条线：剧集播放时不能把剧场版弹幕混进来
     if (params.type !== "movie" && _isMovie(a)) continue;
-    // 只在同类型内匹配：动漫用动漫的源，真人剧用真人剧的源
     if (wantLive !== null && _isLiveActionTitle(at) !== wantLive) continue;
     var y = _titleYear(at);
     if (wantYear && y && Math.abs(y - wantYear) > 1) continue;
-
-    probes++;
-    var eps = await _cachedBangumi(params, String(a.animeId));
-    // 每季独立编号的番剧（咒术回战等）：只有标题季号明确匹配的条目才可用。
-    // 合集版第4话可能只是第一季第4集，用来匹配第二季会串集。
-    if (globalNumbering === false && seasonNum) {
-      if (_titleSeason(at) !== seasonNum) {
-        console.log(TAG, "跳过异季/合集条目 [" + at + "]（每季独立编号）");
-        continue;
-      }
-    } else if (_seasonConflict(at, eps, seasonNum)) {
-      console.log(TAG, "跳过异季条目 [" + at + "]");
+    probeList.push(a);
+  }
+  // 镜像去重：标题去掉年份/类型标签/来源后完全相同的两个条目基本是同一份数据
+  // （凡人修仙传 bilibili 18827 条 vs 360 18826 条，差 1 条）。
+  // 下两份 1.5MB 只为多 1 条弹幕不值得，保留排序靠前的官方源。
+  var seenNorm = Object.create(null);
+  var deduped = [];
+  for (var d = 0; d < probeList.length; d++) {
+    var nt = _normTitle(probeList[d].animeTitle);
+    if (nt && seenNorm[nt]) {
+      console.log(TAG, "跳过镜像条目 [" + probeList[d].animeTitle + "]");
       continue;
     }
-    var ep = _pickEpisode(eps, epNo);
-    if (!ep) {
-      // 该源可能缓存过期，强刷一次分集再试
-      eps = await _cachedBangumi(params, String(a.animeId), true);
-      if (_seasonConflict(at, eps, seasonNum)) continue;
-      ep = _pickEpisode(eps, epNo);
-    }
-    if (!ep) continue;
-
-    var id = String(ep.episodeId);
-    if (tried[id]) continue;
-    tried[id] = 1;
-
-    var raw = await _fetchRaw(params, server, id);
-    if (!raw) continue;
-    out.push({
-      commentId: id, raw: raw, title: at,
-      source: String(a.source || ""), live: _isLiveActionTitle(at),
-      epCount: parseInt(a.episodeCount, 10) || 0
-    });
-    console.log(TAG, "候选源 [" + at + "] " + raw.length + " 条");
+    if (nt) seenNorm[nt] = 1;
+    deduped.push(probeList[d]);
   }
+  probeList = deduped;
+  console.log(TAG, "粗筛后 " + probeList.length + " 个候选待验证");
 
+  // ---- 3) 并行取分集 ----
+  var picked = await _mapLimit(probeList, 4, async function (a) {
+    var at = String(a.animeTitle || "");
+    var eps = await _cachedBangumi(params, String(a.animeId));
+    if (globalNumbering === false && seasonNum) {
+      if (_titleSeason(at) !== seasonNum) return null;
+    } else if (_seasonConflict(at, eps, seasonNum)) {
+      return null;
+    }
+    var ep = _pickEpisode(eps, epNo);
+    if (!ep) return null;
+    return { a: a, ep: ep, eps: eps };
+  });
+
+  var valid = [];
+  for (var j = 0; j < picked.length; j++) {
+    var it = picked[j];
+    if (!it) continue;
+    var vid = String(it.ep.episodeId);
+    if (tried[vid]) continue;
+    tried[vid] = 1;
+    valid.push(it);
+  }
+  console.log(TAG, "验证通过 " + valid.length + " 个源，开始并行取弹幕");
+
+  // ---- 4) 并行取弹幕（最多 4 并发）----
+  var fetched = await _mapLimit(valid, 4, async function (x) {
+    var raw = await _fetchRaw(params, server, String(x.ep.episodeId));
+    if (!raw) return null;
+    var at2 = String(x.a.animeTitle || "");
+    return {
+      commentId: String(x.ep.episodeId), raw: raw, title: at2,
+      source: String(x.a.source || ""), live: _isLiveActionTitle(at2),
+      epCount: parseInt(x.a.episodeCount, 10) || 0,
+      globalNum: ((_firstRealEp(x.eps) || 0) > 1)
+    };
+  });
+
+  for (var k = 0; k < fetched.length; k++) {
+    var f = fetched[k];
+    if (!f) continue;
+    out.push(f);
+    console.log(TAG, "候选源 [" + f.title + "] " + f.raw.length + " 条");
+  }
   if (out.length === 0) return [];
 
-  // 3) 弹幕多的排前面 → 主源就是弹幕最多的平台
+  // ---- 5) 按弹幕量排序 + 多重锁定 ----
   out.sort(function (x, yy) { return yy.raw.length - x.raw.length; });
 
-  // 4) 用胜出者的真实类型锁定候选集。
-  //    类型判不出时（Forward 没传 commentId、标题也没标记），这一步保证
-  //    动漫和真人剧不会因为"弹幕更多"而互相串台。
   var seedLive = out[0].live;
   if (seedLive === true || seedLive === false) {
     var kept = [];
@@ -1098,14 +1161,11 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
     out = kept;
   }
 
-  // 5) 年份锁定：同系列的独立篇章（如咒术回战「死灭回游」2026）年份差很大，
-  //    即使标题都含系列名也不能混。以胜出者为基准，差超过 1 年剔除。
   var seedYear = _titleYear(out[0].title);
   if (seedYear) {
     var sameYear = [];
     for (var n = 0; n < out.length; n++) {
-      // 全局连续编号的条目不受年份限制：凡人修仙传「第三季」(2023) 的第80话
-      // 依然是正片，年度差异只是分季上线时间不同，不能当成异年篇章剔除。
+      // 全局连续编号的季条目（凡人第三季第80话）不受年份限制
       if (out[n].globalNum) { sameYear.push(out[n]); continue; }
       var cy = _titleYear(out[n].title);
       if (!cy || Math.abs(cy - seedYear) <= 1) sameYear.push(out[n]);
@@ -1116,7 +1176,6 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
     out = sameYear;
   }
 
-  // 6) 单集条目：正片是多集时，单集条目基本都是剧场版/特别篇，弹幕时间轴对不上
   var seedEpCount = out[0].epCount || 0;
   if (seedEpCount > 5) {
     var multi = [];
@@ -1129,7 +1188,6 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
     out = multi;
   }
 
-  // 7) 语言版本：正片播放时不该混入粤语/日语等配音版的弹幕（内容同为中文但用词不同）
   if (!_hasLangTag(out[0].title)) {
     var plain = [];
     for (var w = 0; w < out.length; w++) {
@@ -1300,6 +1358,14 @@ async function _expandSources(params, server, seed, realEp, globalNumbering) {
     } else {
       console.log(TAG, "跳过镜像预取来源 [" + (pf.title || "") + "] " + pf.raw.length + " 条全部重复");
     }
+  }
+
+  // 候选阶段已经把同类型同集的源全取过一遍了，这里不再遍历搜索列表，
+  // 只为第一次请求失败的源留一次补取机会（prefetched 为空时才会跑探测循环）。
+  if (seed.prefetched && seed.prefetched.length > 0) {
+    var total = all.length;
+    if (got > 1) console.log(TAG, "合并完成，" + got + " 个有效来源共 " + total + " 条（预取复用）");
+    return { raw: all, n: got };
   }
 
   var list = await _cachedSearchList(params, base);
