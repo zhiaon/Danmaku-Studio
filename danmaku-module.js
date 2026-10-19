@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.8.1  当前版本。
+ *   2.8.6  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.8.1",
+  version: "2.8.6",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -49,6 +49,7 @@ WidgetMetadata = {
     },
     {
       name: "mergeSources",
+      hidden: true,
       title: "合并弹幕来源数",
       type: "input",
       value: "3",
@@ -56,6 +57,7 @@ WidgetMetadata = {
     },
     {
       name: "segmentSeconds",
+      hidden: true,
       title: "分段时长(秒)",
       type: "input",
       value: "180",
@@ -63,6 +65,7 @@ WidgetMetadata = {
     },
     {
       name: "segmentPad",
+      hidden: true,
       title: "分段前向重叠(秒)",
       type: "input",
       value: "3",
@@ -70,6 +73,7 @@ WidgetMetadata = {
     },
     {
       name: "cacheHours",
+      hidden: true,
       title: "缓存时长(小时)",
       type: "input",
       value: "24",
@@ -77,6 +81,7 @@ WidgetMetadata = {
     },
     {
       name: "maxCachedEpisodes",
+      hidden: true,
       title: "最多缓存集数",
       type: "input",
       value: "5",
