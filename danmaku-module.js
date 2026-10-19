@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.9.2  当前版本。
+ *   2.9.3  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.9.2",
+  version: "2.9.3",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -104,7 +104,7 @@ var FAIL_TTL = 5 * 60;
 
 // 弹幕抓取逻辑版本。改动「抓取方式 / 去重规则 / 返回内容」时 +1，
 // 旧缓存会因版本不符自动失效并重新抓取，避免升级后仍显示老数据。
-var CACHE_VERSION = 9;
+var CACHE_VERSION = 10;
 
 // 实测结论：本服务的 episodeId 是"当前缓存"的临时编号，缓存淘汰后 ID 立刻失效（服务端日志：
 //   error: [cache] No URL found for ID: 13126 / [LogVar-API] Comment with ID 13126 not found）。
@@ -569,22 +569,11 @@ function _rank(animes, ctx) {
   }
   scored.sort(function (x, y) { return y.score - x.score; });
 
+  // 原样返回服务端对象，只调整顺序。
+  // 之前裁剪成固定字段，丢了 isFavorited 等字段，Forward 无法完成自动匹配。
   var out = [];
   for (var k = 0; k < scored.length; k++) {
-    var it = scored[k].item;
-    out.push({
-      animeId: String(it.animeId),
-      bangumiId: it.bangumiId,
-      animeTitle: String(it.animeTitle || ""),
-      type: it.type,
-      typeDescription: it.typeDescription,
-      imageUrl: it.imageUrl,
-      source: it.source,
-      rating: it.rating,
-      episodeCount: it.episodeCount,
-      startDate: it.startDate,
-      aliases: it.aliases
-    });
+    out.push(scored[k].item);
     if (out.length >= SEARCH_TOP_N) break;
   }
   return out;
@@ -734,18 +723,13 @@ async function getDetailById(params) {
       }
     }
 
+    // 原样返回服务端 episode，不做字段裁剪、不转换类型。
+    // Forward 依赖 episodeId 的原始形态建立 commentId 关联。
     var out = [];
     for (var k = 0; k < eps.length; k++) {
       var e = eps[k];
       if (!e || e.episodeId === undefined || e.episodeId === null) continue;
-      out.push({
-        seasonId: e.seasonId,
-        episodeId: String(e.episodeId),
-        episodeTitle: String(e.episodeTitle || ""),
-        episodeNumber: e.episodeNumber,
-        airDate: e.airDate,
-        url: e.url
-      });
+      out.push(e);
     }
 
     // 用户正在选集，趁这段时间把弹幕下好，点播放时直接命中缓存。
@@ -1757,7 +1741,8 @@ function _buildIndex(rawList, loose, skipDedup) {
     if (m === undefined || m === null) m = "";
     else if (typeof m !== "string") m = String(m);
 
-    var item = { p: p, m: m };
+    // 保留 t（时间）和 cid，与服务端原始条目形态一致，Forward 解析更稳
+    var item = { p: p, m: m, t: t };
     if (d.cid !== undefined && d.cid !== null) item.cid = d.cid;
     items.push(item);
     times.push(t);
