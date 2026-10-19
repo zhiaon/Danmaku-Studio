@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.8.2  当前版本。
+ *   2.8.3  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.8.2",
+  version: "2.8.3",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -46,6 +46,13 @@ WidgetMetadata = {
       placeholders: [
         { title: "示例 danmu_api", value: "https://{domain}/{token}" }
       ]
+    },
+    {
+      name: "danmuOffset",
+      title: "弹幕时间偏移(秒)",
+      type: "input",
+      value: "0",
+      description: "弹幕比画面早就填正数（如 30），比画面晚就填负数（如 -30）。片头长度不同会造成整体偏移，默认 0 不调整"
     }
   ],
 
@@ -138,6 +145,12 @@ function _num(v, fallback) {
 function _numAllowZero(v, fallback) {
   var n = parseFloat(v);
   return isFinite(n) && n >= 0 ? n : fallback;
+}
+
+/** 字符串 → 有符号数：弹幕偏移允许负值（-30 = 弹幕整体提前 30 秒） */
+function _snum(v, fallback) {
+  var n = parseFloat(v);
+  return isFinite(n) ? n : fallback;
 }
 
 /**
@@ -1557,7 +1570,10 @@ async function _loadEpisode(params) {
       : (params.tmdbId ? "tmdb:" + params.tmdbId + ":" + params.type : ""));
   if (!logical) throw new Error("无法确定弹幕标识（缺少 commentId 与片名/季/集）");
 
-  var dk = K_COMMENT + _hash(logical);
+  // 时间偏移：片源片头长度不同会让弹幕整体错位，这里按参数整体平移。
+  // 偏移量进入缓存键，改了偏移会重建索引，但不会重新下载（原始弹幕另有缓存）。
+  var danmuOff = _snum(_cfg(params, "danmuOffset", 0), 0);
+  var dk = K_COMMENT + _hash(logical + (danmuOff ? "|off:" + danmuOff : ""));
   if (_isCooling(dk)) {
     console.log(TAG, "该集处于失败冷却期，跳过请求", logical);
     return null;
@@ -1612,7 +1628,7 @@ async function _loadEpisode(params) {
   var merged = await _expandSources(params, _server(params), hit, realEp, globalNumbering);
   var n = merged.n || 1;
 
-  var idx = _buildIndex(merged.raw, n > 1);
+  var idx = _buildIndex(merged.raw, n > 1, danmuOff);
   if (idx.items.length === 0) {
     _markCooling(dk, "弹幕全部无效");
     return null;
@@ -1676,7 +1692,7 @@ function _danmuKey(d, loose) {
  *   - 只保留 {p,m,cid}，去掉 t/like 等客户端不需要的字段
  * 排序用 时间→原始顺序 双键稳定排序，同时间戳弹幕先后不乱。
  */
-function _buildIndex(rawList, loose) {
+function _buildIndex(rawList, loose, offset) {
   var slim = [];
   var order = [];       // [time, originalIndex]
   var seen = Object.create(null);
@@ -1697,6 +1713,14 @@ function _buildIndex(rawList, loose) {
 
     var comma = p.indexOf(",");
     var t = parseFloat(comma >= 0 ? p.slice(0, comma) : p);
+
+    // 时间偏移：p 形如 "45.65,1,16776960,[bilibili1]"，只改第一个数字
+    if (offset && isFinite(t)) {
+      var nt = t + offset;
+      if (nt < 0) nt = 0;
+      p = nt.toFixed(2) + (comma >= 0 ? p.slice(comma) : "");
+      t = nt;
+    }
 
     var m = d.m;
     if (m === undefined || m === null) m = "";
