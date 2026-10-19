@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.8.0  当前版本。
+ *   2.8.1  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.8.0",
+  version: "2.8.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -500,7 +500,11 @@ function _titleMatch(title, kw) {
   rest = rest.trim();
   if (!rest) return 100;
 
-  if (/^之/.test(rest)) return 85;               // 之 + 子篇章，属本体
+  if (/^之/.test(rest)) {
+    // 「之凡人风起天南」是本体的子篇章；「之凡人风起天南 贰」带季号，按季处理
+    if (_titleSeason(rest) !== null) return 80;
+    return 85;
+  }
   // 数字开头必须先于季号判断：「斗罗大陆5重生唐三…第1季」是第5部动态漫，
   // 若先匹配到尾巴上的「第1季」会被当成第一季，反而压过正传。
   if (/^[0-9]/.test(rest)) return 45;            // 数字续作
@@ -769,8 +773,11 @@ async function getDetailById(params) {
     if (!params.__noPrefetch && params.episode !== undefined && params.episode !== null) {
       var preEp = parseInt(params.episode, 10);
       if (isFinite(preEp) && preEp > 0) {
-        _prefetchEpisode(params, preEp);
-        if (preEp + 1 <= out.length) _prefetchEpisode(params, preEp + 1);
+        // 串行预取：先把当前集下完（用户最可能点这一集），再下下一集。
+        // 并发两集会平分带宽，弹幕大的剧（庆余年单集 3MB）两边都赶不上。
+        _prefetchEpisode(params, preEp).then(function () {
+          if (preEp + 1 <= out.length) _prefetchEpisode(params, preEp + 1);
+        });
       }
     }
     return out;
@@ -1004,7 +1011,7 @@ async function _mapLimit(items, limit, fn) {
       var i = idx++;
       if (i >= items.length) return;
       try { out[i] = await fn(items[i], i); }
-      catch (e) { out[i] = null; }
+      catch (e) { console.error(TAG, "并发任务失败", e && e.message); out[i] = null; }
     }
   }
   var ws = [];
@@ -1082,7 +1089,10 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
   var wantLimit = Math.floor(_numAllowZero(params.mergeSources, DEFAULT_MERGE_SOURCES));
   if (!(wantLimit >= 1)) wantLimit = 1;
   if (wantLimit > MERGE_HARD_LIMIT) wantLimit = MERGE_HARD_LIMIT;
-  var maxProbe = Math.min(wantLimit, 6);
+
+  // 探测名额要比实际需要的多留一些：镜像条目、没有目标集的篇章都会占掉名额。
+  var maxProbe = Math.min(wantLimit * 2, 8);
+  var seenNorm = Object.create(null);
   for (var i = 0; i < ranked.length && probeList.length < maxProbe; i++) {
     var a = ranked[i];
     var at = String(a.animeTitle || "");
@@ -1092,23 +1102,15 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
     if (wantLive !== null && _isLiveActionTitle(at) !== wantLive) continue;
     var y = _titleYear(at);
     if (wantYear && y && Math.abs(y - wantYear) > 1) continue;
-    probeList.push(a);
-  }
-  // 镜像去重：标题去掉年份/类型标签/来源后完全相同的两个条目基本是同一份数据
-  // （凡人修仙传 bilibili 18827 条 vs 360 18826 条，差 1 条）。
-  // 下两份 1.5MB 只为多 1 条弹幕不值得，保留排序靠前的官方源。
-  var seenNorm = Object.create(null);
-  var deduped = [];
-  for (var d = 0; d < probeList.length; d++) {
-    var nt = _normTitle(probeList[d].animeTitle);
-    if (nt && seenNorm[nt]) {
-      console.log(TAG, "跳过镜像条目 [" + probeList[d].animeTitle + "]");
+    // 镜像去重要在占名额之前做，否则 360 这类镜像会把真正有增量的源挤出候选
+    var nt0 = _normTitle(at);
+    if (nt0 && seenNorm[nt0]) {
+      console.log(TAG, "跳过镜像条目 [" + at + "]");
       continue;
     }
-    if (nt) seenNorm[nt] = 1;
-    deduped.push(probeList[d]);
+    if (nt0) seenNorm[nt0] = 1;
+    probeList.push(a);
   }
-  probeList = deduped;
   console.log(TAG, "粗筛后 " + probeList.length + " 个候选待验证");
 
   // ---- 3) 并行取分集 ----
@@ -1116,12 +1118,12 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
     var at = String(a.animeTitle || "");
     var eps = await _cachedBangumi(params, String(a.animeId));
     if (globalNumbering === false && seasonNum) {
-      if (_titleSeason(at) !== seasonNum) return null;
+      if (_titleSeason(at) !== seasonNum) { console.log(TAG, "  跳过(季号不符): " + at); return null; }
     } else if (_seasonConflict(at, eps, seasonNum)) {
-      return null;
+      console.log(TAG, "  跳过(季冲突): " + at); return null;
     }
     var ep = _pickEpisode(eps, epNo);
-    if (!ep) return null;
+    if (!ep) { console.log(TAG, "  跳过(无第" + epNo + "话): " + at + " / " + eps.length + "集"); return null; }
     return { a: a, ep: ep, eps: eps };
   });
 
@@ -1134,6 +1136,7 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
     tried[vid] = 1;
     valid.push(it);
   }
+  if (valid.length > wantLimit) valid = valid.slice(0, wantLimit);
   console.log(TAG, "验证通过 " + valid.length + " 个源，开始并行取弹幕");
 
   // ---- 4) 并行取弹幕（最多 4 并发）----
@@ -1565,8 +1568,10 @@ function _prefetchEpisode(params, epNo) {
     p.commentId = "";
     p.__noPrefetch = true;
     console.log(TAG, "后台预取第" + epNo + "集");
-    _loadEpisode(p).then(function () {}, function () {});
-  } catch (e) { /* 预取失败不影响主流程 */ }
+    return _loadEpisode(p).then(function (r) { return r; }, function () { return null; });
+  } catch (e) {
+    return Promise.resolve(null);
+  }
 }
 
 /**
