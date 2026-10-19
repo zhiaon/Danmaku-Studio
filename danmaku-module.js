@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.8.1  当前版本。
+ *   2.8.2  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.8.1",
+  version: "2.8.2",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -46,41 +46,6 @@ WidgetMetadata = {
       placeholders: [
         { title: "示例 danmu_api", value: "https://{domain}/{token}" }
       ]
-    },
-    {
-      name: "mergeSources",
-      title: "合并弹幕来源数",
-      type: "input",
-      value: "3",
-      description: "合并多少个上游平台源，默认 3 个已覆盖绝大部分弹幕且最快；0=只取单一来源；调高会更全但更慢（每源整集 1~2MB）"
-    },
-    {
-      name: "segmentSeconds",
-      title: "分段时长(秒)",
-      type: "input",
-      value: "180",
-      description: "每次向客户端返回的弹幕时间窗口长度，300 秒以上更省请求"
-    },
-    {
-      name: "segmentPad",
-      title: "分段前向重叠(秒)",
-      type: "input",
-      value: "3",
-      description: "窗口起点向前多取几秒，避免边界弹幕丢失"
-    },
-    {
-      name: "cacheHours",
-      title: "缓存时长(小时)",
-      type: "input",
-      value: "24",
-      description: "分集列表与整集弹幕的本地缓存有效期"
-    },
-    {
-      name: "maxCachedEpisodes",
-      title: "最多缓存集数",
-      type: "input",
-      value: "5",
-      description: "整集弹幕缓存条数上限，超出淘汰最久未使用的（每集约 0.5~1MB）"
     }
   ],
 
