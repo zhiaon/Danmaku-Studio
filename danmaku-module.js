@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.9.6  当前版本。
+ *   2.9.7  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.9.6",
+  version: "2.9.7",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -108,6 +108,13 @@ WidgetMetadata = {
       functionName: "getCommentsById",
       type: "danmu",
       params: []
+    },
+    {
+      id: "getDanmuWithSegmentTime",
+      title: "获取指定时刻弹幕",
+      functionName: "getDanmuWithSegmentTime",
+      type: "danmu",
+      params: []
     }
   ]
 };
@@ -127,7 +134,7 @@ var DEFAULT_MAX_EPISODES = 5;
 var DEFAULT_MERGE_SOURCES = 3;   // 同一集合并的上游平台数，默认 3；0 = 单一来源
 var MERGE_HARD_LIMIT = 12;        // 无论用户填多少，最多合并 12 个来源
 var SEARCH_CACHE_HOURS = 12;      // 搜索关键词结果缓存（与整集缓存分开，更宽松）
-var SEARCH_TOP_N = 30;            // 搜索结果最多返回条数
+var SEARCH_TOP_N = 0;             // 0 = 不限条数，与官方 danmu_api 一致
 var USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) " +
                  "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 
@@ -616,25 +623,15 @@ function _rank(animes, ctx) {
   }
   scored.sort(function (x, y) { return y.score - x.score; });
 
-  // 保持 v2.8.1 的字段形态：animeId 必须是字符串。
-  // 改成透传原始对象（animeId 变数字）后自动匹配失效，已回退。
+  // 原样透传服务端对象（与官方 danmu_api 完全一致）。
+  // 关键：animeId 必须保持服务端的数字类型。Forward 用 tmdbId 在本地存
+  // "上次选中的 animeId"，下次播放时做严格比较；一旦这里转成字符串，
+  // 12345 === "12345" 恒为 false，自动匹配永远失败，只能手动重新选。
+  // 同理不要裁剪字段：isFavorited 等字段官方也会原样返回。
   var out = [];
   for (var k = 0; k < scored.length; k++) {
-    var it = scored[k].item;
-    out.push({
-      animeId: String(it.animeId),
-      bangumiId: it.bangumiId,
-      animeTitle: String(it.animeTitle || ""),
-      type: it.type,
-      typeDescription: it.typeDescription,
-      imageUrl: it.imageUrl,
-      source: it.source,
-      rating: it.rating,
-      episodeCount: it.episodeCount,
-      startDate: it.startDate,
-      aliases: it.aliases
-    });
-    if (out.length >= SEARCH_TOP_N) break;
+    out.push(scored[k].item);
+    if (SEARCH_TOP_N > 0 && out.length >= SEARCH_TOP_N) break;
   }
   return out;
 }
@@ -772,19 +769,14 @@ async function getDetailById(params) {
       }
     }
 
-    // 与 v2.8.1 一致：episodeId 统一转成字符串。
+    // 原样透传服务端 episode（与官方 danmu_api 的
+    // `return resJson.bangumi.episodes` 一致）：episodeId / episodeNumber
+    // 保持服务端原始类型，Forward 的"当前集"匹配依赖这些原始值。
     var out = [];
     for (var k = 0; k < eps.length; k++) {
       var e = eps[k];
       if (!e || e.episodeId === undefined || e.episodeId === null) continue;
-      out.push({
-        seasonId: e.seasonId,
-        episodeId: String(e.episodeId),
-        episodeTitle: String(e.episodeTitle || ""),
-        episodeNumber: e.episodeNumber,
-        airDate: e.airDate,
-        url: e.url
-      });
+      out.push(e);
     }
 
     // 用户正在选集，趁这段时间把弹幕下好，点播放时直接命中缓存。
@@ -1848,7 +1840,9 @@ async function _danmuAt(params) {
 async function getCommentsById(params) {
   try {
     var list = await _danmuAt(params);
-    return { count: list.length, comments: list };
+    // 官方规范：弹幕响应是纯数组 [{p, m, cid}]，不要包 {count, comments}。
+    // 包裹对象会让 Forward 解析失败，进而认为本次选择无效。
+    return list;
   } catch (e) {
     console.error(TAG, "getCommentsById 失败", e);
     throw e;
@@ -1864,7 +1858,7 @@ async function getCommentsById(params) {
 async function getDanmuWithSegmentTime(params) {
   try {
     var list = await _danmuAt(params);
-    return { count: list.length, comments: list };
+    return list;
   } catch (e) {
     console.error(TAG, "getDanmuWithSegmentTime 失败", e);
     throw e;
