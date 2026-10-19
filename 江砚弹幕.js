@@ -669,6 +669,17 @@ async function _resolveAndFetch(params) {
   var cands = _matchFilenames(params);
   var passed = params.commentId ? String(params.commentId) : "";
 
+  // 快路径：先用客户端透传的 commentId 直连。
+  // 新鲜 ID 命中能省掉 match 那 ~2s；即便过期也只是一次 ~0.3s 的 404，比盲跑 match 划算。
+  if (passed) {
+    var fast = await _fetchRaw(params, server, passed);
+    if (fast) {
+      console.log(TAG, "透传 commentId 命中，跳过 match", passed);
+      return { commentId: passed, raw: fast };
+    }
+  }
+
+  // 慢路径：match 现场换新鲜 ID，再取弹幕
   for (var i = 0; i < cands.length; i++) {
     try {
       var id = await _matchId(params, cands[i]);
@@ -678,11 +689,6 @@ async function _resolveAndFetch(params) {
     } catch (e) {
       console.error(TAG, "候选失败", cands[i], e.message);
     }
-  }
-  // 兜底：透传的 ID 有时仍有效（缓存还没被挤掉）
-  if (passed) {
-    var raw2 = await _fetchRaw(params, server, passed);
-    if (raw2) return { commentId: passed, raw: raw2 };
   }
   return null;
 }
