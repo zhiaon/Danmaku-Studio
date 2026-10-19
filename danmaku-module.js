@@ -20,6 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
+ *   1.3.0  重命名 danmaku-module.js；site 改为 GitHub 仓库地址；参数描述通用化。
  *   1.2.3  弹幕服务器参数描述与占位符改为通用表述，不再限定 LogVar。
  *   1.2.2  移除 getDanmuWithSegmentTime 注册，使弹幕入口与 danmu_api 完全一致。
  *          此前 Forward 优先调用分段接口、每次只回 180 秒窗口弹幕，导致弹幕数远少于 danmu_api。
@@ -41,7 +42,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "1.2.3",
+  version: "1.3.0",
   requiredVersion: "0.0.2",
   description: "通用弹幕",
   author: "江砚",
