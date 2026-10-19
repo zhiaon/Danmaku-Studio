@@ -45,7 +45,7 @@ WidgetMetadata = {
   requiredVersion: "0.0.2",
   description: "通用弹幕",
   author: "江砚",
-  site: "https://vidm.zhiaon.top/nzhyddtld",
+  site: "https://github.com/zhiaon/jiangyan-danmu",
 
   globalParams: [
     {
