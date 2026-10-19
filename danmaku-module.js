@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.4.0  当前版本。
+ *   2.5.0  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.4.0",
+  version: "2.5.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -139,7 +139,7 @@ var FAIL_TTL = 5 * 60;
 
 // 弹幕抓取逻辑版本。改动「抓取方式 / 去重规则 / 返回内容」时 +1，
 // 旧缓存会因版本不符自动失效并重新抓取，避免升级后仍显示老数据。
-var CACHE_VERSION = 6;
+var CACHE_VERSION = 7;
 
 // 实测结论：本服务的 episodeId 是"当前缓存"的临时编号，缓存淘汰后 ID 立刻失效（服务端日志：
 //   error: [cache] No URL found for ID: 13126 / [LogVar-API] Comment with ID 13126 not found）。
@@ -511,18 +511,27 @@ function _rank(animes, ctx) {
 
     // 来源：官方播放平台源优先，聚合源次之
     if (src === "bilibili" || src === "youku" || src === "iqiyi" ||
-        src === "tencent" || src === "mgtv" || src === "qq") s += 18;
+        src === "tencent" || src === "mgtv" || src === "qq") s += 30;
     else if (src.indexOf("dandan") >= 0 && src.indexOf("bahamut") >= 0) s += 12;
-    else if (src.indexOf("dandan") >= 0) s += 10;
-    else if (src === "bahamut") s += 10;
-    else s += 8;
+    else if (src.indexOf("dandan") >= 0) s += 8;
+    else if (src === "bahamut") s += 8;
+    else s += 6;
 
     // 正在该平台播放 → 该平台源再加一档，确保"播放平台源优先"
     if (platform && src === platform) s += 25;
 
-    // 评分
+    // 评分：官方平台源常常没有评分字段，权重不能太高，
+    // 否则 dandan 的 8.7 分（+17）会直接盖过 B站 197 集完整版。
     var r = parseFloat(a.rating);
-    if (isFinite(r) && r > 0) s += Math.min(20, r * 2);
+    if (isFinite(r) && r > 0) s += Math.min(10, r * 1.2);
+
+    // 季号冲突：标题明确写了「第N季」而当前在播别的季，大幅降权。
+    // 否则「凡人修仙传 第四季」会排到「凡人修仙传(2020)」前面，
+    // Forward 自动匹配就会拿第四季（第125~176话）去配第5集。
+    if (ctx.season) {
+      var tseason = _titleSeason(title);
+      if (tseason !== null && tseason !== ctx.season) s -= 40;
+    }
 
     if (_isJunk(a)) s -= 100;
     if (a.isFavorited) s += 5;
@@ -572,7 +581,7 @@ async function searchDanmu(params) {
     }
 
     var ttl = SEARCH_CACHE_HOURS * 3600;
-    var key = K_SEARCH + _hash(keyword + "|" + season);
+    var key = K_SEARCH + _hash(keyword + "|" + season + "|v" + CACHE_VERSION);
     var rec = _scache(key, ttl);
 
     if (!rec || !Array.isArray(rec.list)) {
@@ -608,7 +617,8 @@ async function searchDanmu(params) {
       keyword: keyword,
       live: _inferLiveAction(params),
       link: params.link,
-      year: _inferYear(params)
+      year: _inferYear(params),
+      season: isFinite(parseInt(season, 10)) ? parseInt(season, 10) : null
     }) };
   } catch (e) {
     console.error(TAG, "searchDanmu 失败", e);
@@ -944,7 +954,8 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
 
   var wantYear = _inferYear(params);
   var ranked = _rank(list, {
-    type: params.type, keyword: base, live: wantLive, link: params.link, year: wantYear
+    type: params.type, keyword: base, live: wantLive, link: params.link, year: wantYear,
+    season: seasonNum
   });
   var probes = 0;
   var MAX_PROBE = 12;
@@ -1109,7 +1120,7 @@ function _markCooling(danmuKey, reason) {
 
 /** 搜索列表（带缓存，不做季数过滤/排序，供多来源合并复用） */
 async function _cachedSearchList(params, keyword) {
-  var key = K_SEARCH + _hash(keyword + "|");
+  var key = K_SEARCH + _hash(keyword + "|v" + CACHE_VERSION);
   var rec = _scache(key, SEARCH_CACHE_HOURS * 3600);
   if (rec && Array.isArray(rec.list)) return rec.list;
   try {
