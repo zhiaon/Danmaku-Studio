@@ -47,6 +47,13 @@ WidgetMetadata = {
       ]
     },
     {
+      name: "mergeSources",
+      title: "合并弹幕来源数",
+      type: "input",
+      value: "3",
+      description: "同一集合并多少个上游平台的弹幕(如 qq+爱奇艺+弹弹)，弹幕更完整；0 表示只取单一来源(最快)"
+    },
+    {
       name: "segmentSeconds",
       title: "分段时长(秒)",
       type: "input",
@@ -120,6 +127,8 @@ var DEFAULT_SEGMENT = 180;
 var DEFAULT_PAD = 3;
 var DEFAULT_CACHE_HOURS = 24;
 var DEFAULT_MAX_EPISODES = 5;
+var DEFAULT_MERGE_SOURCES = 3;    // 同一集合并的上游平台数，0 = 单一来源
+var MERGE_HARD_LIMIT = 6;         // 无论用户填多少，最多合并 6 个来源
 var SEARCH_CACHE_HOURS = 12;      // 搜索关键词结果缓存（与整集缓存分开，更宽松）
 var SEARCH_TOP_N = 30;            // 搜索结果最多返回条数
 var USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) " +
@@ -620,8 +629,8 @@ function _matchFilenames(params) {
   return out.slice(0, MATCH_CANDIDATES);
 }
 
-/** 按文件名现场换取新的 episodeId；无命中返回 "" */
-async function _matchId(params, fileName) {
+/** 按文件名现场换取 episodeId 及来源标题；无命中返回 null */
+async function _matchDetail(params, fileName) {
   var server = _server(params);
   var resp = await Widget.http.post(
     server + "/api/v2/match",
@@ -630,9 +639,17 @@ async function _matchId(params, fileName) {
   );
   var data = _unwrap(resp, "文件名匹配");
   var hit = data && data.isMatched && Array.isArray(data.matches) && data.matches[0];
-  var id = hit ? String(hit.episodeId || "") : "";
-  console.log(TAG, "匹配", fileName, "→", id || "未命中");
-  return id;
+  if (!hit || !hit.episodeId) {
+    console.log(TAG, "匹配", fileName, "→ 未命中");
+    return null;
+  }
+  var out = {
+    id: String(hit.episodeId),
+    title: String(hit.title || ""),
+    source: String(hit.source || "")
+  };
+  console.log(TAG, "匹配", fileName, "→", out.id, out.title ? ("[" + out.title + "]") : "");
+  return out;
 }
 
 /** 拉取单集弹幕原始数组；失败或空返回 null */
@@ -675,17 +692,17 @@ async function _resolveAndFetch(params) {
     var fast = await _fetchRaw(params, server, passed);
     if (fast) {
       console.log(TAG, "透传 commentId 命中，跳过 match", passed);
-      return { commentId: passed, raw: fast };
+      return { commentId: passed, raw: fast, title: "", source: "" };
     }
   }
 
   // 慢路径：match 现场换新鲜 ID，再取弹幕
   for (var i = 0; i < cands.length; i++) {
     try {
-      var id = await _matchId(params, cands[i]);
-      if (!id) continue;
-      var raw = await _fetchRaw(params, server, id);
-      if (raw) return { commentId: id, raw: raw };
+      var det = await _matchDetail(params, cands[i]);
+      if (!det) continue;
+      var raw = await _fetchRaw(params, server, det.id);
+      if (raw) return { commentId: det.id, raw: raw, title: det.title, source: det.source };
     } catch (e) {
       console.error(TAG, "候选失败", cands[i], e.message);
     }
@@ -701,6 +718,112 @@ function _isCooling(danmuKey) {
 
 function _markCooling(danmuKey, reason) {
   _sset(K_FAIL + danmuKey, { t: _now(), cool: true, reason: reason });
+}
+
+/** 搜索列表（带缓存，不做季数过滤/排序，供多来源合并复用） */
+async function _cachedSearchList(params, keyword) {
+  var key = K_SEARCH + _hash(keyword + "|");
+  var rec = _scache(key, SEARCH_CACHE_HOURS * 3600);
+  if (rec && Array.isArray(rec.list)) return rec.list;
+  try {
+    var data = _unwrap(
+      await Widget.http.get(
+        _server(params) + "/api/v2/search/anime?keyword=" + encodeURIComponent(keyword),
+        { headers: _headers(params) }
+      ),
+      "搜索弹幕"
+    );
+    if (!data || data.success === false) return [];
+    rec = { t: _now(), list: Array.isArray(data.animes) ? data.animes : [] };
+    _sset(key, rec);
+    return rec.list;
+  } catch (e) {
+    console.error(TAG, "搜索列表失败", keyword, e.message);
+    return [];
+  }
+}
+
+/** 分集列表（带缓存） */
+async function _cachedBangumi(params, animeId) {
+  var key = K_BANGUMI + animeId;
+  var rec = _scache(key, _num(params.cacheHours, DEFAULT_CACHE_HOURS) * 3600);
+  if (rec && Array.isArray(rec.episodes)) return rec.episodes;
+  try {
+    var data = _unwrap(
+      await Widget.http.get(_server(params) + "/api/v2/bangumi/" + encodeURIComponent(animeId), { headers: _headers(params) }),
+      "获取分集"
+    );
+    var bangumi = data && data.bangumi;
+    if (!bangumi) return [];
+    rec = {
+      t: _now(), animeId: animeId,
+      animeTitle: String(bangumi.animeTitle || ""),
+      seasons: bangumi.seasons || [],
+      episodes: Array.isArray(bangumi.episodes) ? bangumi.episodes : []
+    };
+    _sset(key, rec);
+    return rec.episodes;
+  } catch (e) {
+    console.error(TAG, "分集列表失败", animeId, e.message);
+    return [];
+  }
+}
+
+/**
+ * 合并多来源弹幕 —— 决定弹幕"完整度"的关键。
+ *
+ * 一个 commentId 只对应单一上游平台，实测同一集的弹幕量差异很大：
+ *   qq 14194 条 / 爱奇艺 5701 条 / 弹弹 6444 条。
+ * 只取一份就必然缺失。这里按片名搜出同季的全部番剧条目，逐个取对应分集的弹幕再合并。
+ * 缓存里已有的条目会被跳过，所以重复播放不会重复请求。
+ */
+async function _expandSources(params, server, seed) {
+  var limit = Math.floor(_num(params.mergeSources, DEFAULT_MERGE_SOURCES));
+  if (limit < 0) limit = 0;
+  if (limit > MERGE_HARD_LIMIT) limit = MERGE_HARD_LIMIT;
+  if (limit <= 1 || !seed) return { raw: seed ? seed.raw : [], n: 1 };
+
+  var base = _keyword(params.seriesName || params.title || "");
+  if (!base) base = _keyword(params.episodeName || "");
+  if (!base) return { raw: seed.raw, n: 1 };
+
+  var epRaw = params.episode !== undefined && params.episode !== null ? String(params.episode) : "";
+  var sn = parseInt(epRaw, 10);
+  var epNo = (isFinite(sn) && sn > 0) ? sn : 1;
+  var season = (params.season !== undefined && params.season !== null) ? String(params.season) : "";
+
+  var all = seed.raw.slice();
+  var got = 1;
+  var used = {};
+  if (seed.title) used[seed.title] = 1;
+
+  var list = await _cachedSearchList(params, base);
+  for (var i = 0; i < list.length && got < limit; i++) {
+    var a = list[i];
+    if (!a || a.animeId === undefined || a.animeId === null) continue;
+    var at = String(a.animeTitle || "");
+    if (!at || used[at]) continue;
+    if (at.indexOf(base) < 0) continue;              // 必须是同一系列
+    if (isFinite(sn) && sn > 0 && !_seasonHit(a, season)) continue;   // 必须是同一季
+
+    var eps = await _cachedBangumi(params, String(a.animeId));
+    if (!eps || !eps.length) continue;
+    var ep = null;
+    for (var j = 0; j < eps.length; j++) {
+      if (String(eps[j].episodeNumber) === String(epNo)) { ep = eps[j]; break; }
+    }
+    if (!ep || !ep.episodeId) continue;
+
+    var raw = await _fetchRaw(params, server, String(ep.episodeId));
+    if (!raw) continue;
+    for (var k = 0; k < raw.length; k++) all.push(raw[k]);
+    used[at] = 1;
+    got++;
+    console.log(TAG, "合并来源 " + got + "/" + limit, "[" + at + "] +" + raw.length);
+  }
+
+  if (got > 1) console.log(TAG, "多来源合并完成，" + got + " 个来源共 " + all.length + " 条（待去重）");
+  return { raw: all, n: got };
 }
 
 /**
@@ -748,7 +871,11 @@ async function _loadEpisode(params) {
     return null;
   }
 
-  var idx = _buildIndex(hit.raw);
+  // 合并其余上游平台，补齐弹幕；多来源时才用宽松去重
+  var merged = await _expandSources(params, _server(params), hit);
+  var n = merged.n || 1;
+
+  var idx = _buildIndex(merged.raw, n > 1);
   if (idx.items.length === 0) {
     _markCooling(dk, "弹幕全部无效");
     return null;
@@ -757,6 +884,7 @@ async function _loadEpisode(params) {
     t: _now(),
     commentId: hit.commentId,
     logical: logical,
+    sources: n,
     count: idx.items.length,
     total: idx.total,
     dropped: idx.dropped,
@@ -767,7 +895,7 @@ async function _loadEpisode(params) {
   _touch(dk, maxEp);
   _sdel(K_FAIL + dk);
   console.log(TAG, "弹幕加载完成", logical, "id=" + hit.commentId,
-    "原始", idx.total, "有效", idx.items.length, "丢弃", idx.dropped);
+    "来源", n, "原始", idx.total, "有效", idx.items.length, "丢弃", idx.dropped);
   return rec;
 }
 
@@ -778,7 +906,7 @@ async function _loadEpisode(params) {
  *   - 只保留 {p,m,cid}，去掉 t/like 等客户端不需要的字段
  * 排序用 时间→原始顺序 双键稳定排序，同时间戳弹幕先后不乱。
  */
-function _buildIndex(rawList) {
+function _buildIndex(rawList, loose) {
   var slim = [];
   var order = [];       // [time, originalIndex]
   var seen = Object.create(null);
@@ -801,8 +929,12 @@ function _buildIndex(rawList) {
     else if (typeof m !== "string") m = String(m);
     if (!m.trim()) { dropped++; continue; }
 
-    // 去重键：时间精确到毫秒 + 完整参数串 + 文本，安全不误杀"哈哈哈"连发
-    var dk = t.toFixed(3) + "|" + p + "|" + m;
+    // 单来源：时间精确到毫秒 + 完整参数串 + 文本，安全不误杀"哈哈哈"连发
+    // 多来源合并：同一条弹幕在不同平台会带不同 color/cid/平台标记，
+    //             必须按 0.1 秒 + 文本 收敛，跨平台重复才真正去得掉
+    var dk = loose
+      ? (t.toFixed(1) + "|" + m.trim())
+      : (t.toFixed(3) + "|" + p + "|" + m);
     if (seen[dk]) { dropped++; continue; }
     seen[dk] = 1;
 
