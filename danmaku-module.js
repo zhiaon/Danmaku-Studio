@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   2.9.8  当前版本。
+ *   2.9.1  当前版本。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "2.9.8",
+  version: "2.9.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -46,41 +46,6 @@ WidgetMetadata = {
       placeholders: [
         { title: "示例 danmu_api", value: "https://{domain}/{token}" }
       ]
-    },
-    {
-      name: "mergeSources",
-      title: "合并弹幕来源数",
-      type: "input",
-      value: "3",
-      description: "合并多少个上游平台源，默认 3 个已覆盖绝大部分弹幕且最快；0=只取单一来源；调高会更全但更慢（每源整集 1~2MB）"
-    },
-    {
-      name: "segmentSeconds",
-      title: "分段时长(秒)",
-      type: "input",
-      value: "180",
-      description: "每次向客户端返回的弹幕时间窗口长度，300 秒以上更省请求"
-    },
-    {
-      name: "segmentPad",
-      title: "分段前向重叠(秒)",
-      type: "input",
-      value: "3",
-      description: "窗口起点向前多取几秒，避免边界弹幕丢失"
-    },
-    {
-      name: "cacheHours",
-      title: "缓存时长(小时)",
-      type: "input",
-      value: "24",
-      description: "分集列表与整集弹幕的本地缓存有效期"
-    },
-    {
-      name: "maxCachedEpisodes",
-      title: "最多缓存集数",
-      type: "input",
-      value: "5",
-      description: "整集弹幕缓存条数上限，超出淘汰最久未使用的（每集约 0.5~1MB）"
     }
   ],
 
@@ -112,11 +77,6 @@ WidgetMetadata = {
   ]
 };
 
-// Forward 的部分运行环境通过 window.WidgetMetadata 读取元数据
-if (typeof window !== "undefined") {
-  window.WidgetMetadata = WidgetMetadata;
-}
-
 // ============================ 常量 ============================
 
 var TAG = "[LogVarDanmu]";
@@ -127,7 +87,7 @@ var DEFAULT_MAX_EPISODES = 5;
 var DEFAULT_MERGE_SOURCES = 3;   // 同一集合并的上游平台数，默认 3；0 = 单一来源
 var MERGE_HARD_LIMIT = 12;        // 无论用户填多少，最多合并 12 个来源
 var SEARCH_CACHE_HOURS = 12;      // 搜索关键词结果缓存（与整集缓存分开，更宽松）
-var SEARCH_TOP_N = 0;             // 0 = 不限条数，与官方 danmu_api 一致
+var SEARCH_TOP_N = 30;            // 搜索结果最多返回条数
 var USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) " +
                  "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 
@@ -144,7 +104,7 @@ var FAIL_TTL = 5 * 60;
 
 // 弹幕抓取逻辑版本。改动「抓取方式 / 去重规则 / 返回内容」时 +1，
 // 旧缓存会因版本不符自动失效并重新抓取，避免升级后仍显示老数据。
-var CACHE_VERSION = 10;
+var CACHE_VERSION = 9;
 
 // 实测结论：本服务的 episodeId 是"当前缓存"的临时编号，缓存淘汰后 ID 立刻失效（服务端日志：
 //   error: [cache] No URL found for ID: 13126 / [LogVar-API] Comment with ID 13126 not found）。
@@ -581,13 +541,6 @@ function _rank(animes, ctx) {
     var ec = parseInt(a.episodeCount, 10);
     if (isFinite(ec) && ec > 0) s += Math.min(50, Math.round(Math.log(ec + 1) * 12));
 
-    // 8.1) 集数不足以覆盖当前集 → 降权但不剔除。
-    //      播放第 128 集时，18 集的「合集篇」根本不包含这一集。
-    if (isFinite(ec) && ec > 0 && ctx.episode) {
-      var needEp = parseInt(ctx.episode, 10);
-      if (isFinite(needEp) && needEp > 1 && ec < needEp) s -= 60;
-    }
-
     // 9) 来源：官方播放平台源优先，聚合源次之
     // 官方播放平台（B站/腾讯/优酷/爱奇艺/芒果）优先于聚合源。
     // 40 分足够压过 dandan 的评分+收藏加成，但小于「本体 vs 衍生」的 45 分差，
@@ -616,15 +569,23 @@ function _rank(animes, ctx) {
   }
   scored.sort(function (x, y) { return y.score - x.score; });
 
-  // 原样透传服务端对象（与官方 danmu_api 完全一致）。
-  // 关键：animeId 必须保持服务端的数字类型。Forward 用 tmdbId 在本地存
-  // "上次选中的 animeId"，下次播放时做严格比较；一旦这里转成字符串，
-  // 12345 === "12345" 恒为 false，自动匹配永远失败，只能手动重新选。
-  // 同理不要裁剪字段：isFavorited 等字段官方也会原样返回。
   var out = [];
   for (var k = 0; k < scored.length; k++) {
-    out.push(scored[k].item);
-    if (SEARCH_TOP_N > 0 && out.length >= SEARCH_TOP_N) break;
+    var it = scored[k].item;
+    out.push({
+      animeId: String(it.animeId),
+      bangumiId: it.bangumiId,
+      animeTitle: String(it.animeTitle || ""),
+      type: it.type,
+      typeDescription: it.typeDescription,
+      imageUrl: it.imageUrl,
+      source: it.source,
+      rating: it.rating,
+      episodeCount: it.episodeCount,
+      startDate: it.startDate,
+      aliases: it.aliases
+    });
+    if (out.length >= SEARCH_TOP_N) break;
   }
   return out;
 }
@@ -668,9 +629,6 @@ async function searchDanmu(params) {
     // 季号冲突交给 _rank 的 -45 降权处理，完整版始终保留。
     var pool = rec.list;
 
-    // 集数不足的源不删除，只在 _rank 里降权。
-    // 实测：删掉候选后 Forward 反而不自动匹配了，完整列表更稳。
-
     // 类型表决：Forward 没给明确信号时，按候选中占多数的类型给弱偏好。
     // 同名真人剧和动漫并存时（凡人修仙传 2020 动画 vs 2025 电视剧），
     // 多数派排前面，少数派仍然保留，用户手动也能选到。
@@ -694,8 +652,7 @@ async function searchDanmu(params) {
       liveHint: liveHint,
       link: params.link,
       year: _inferYear(params),
-      season: isFinite(parseInt(season, 10)) ? parseInt(season, 10) : null,
-      episode: params.episode
+      season: isFinite(parseInt(season, 10)) ? parseInt(season, 10) : null
     }) };
   } catch (e) {
     console.error(TAG, "searchDanmu 失败", e);
@@ -762,14 +719,18 @@ async function getDetailById(params) {
       }
     }
 
-    // 原样透传服务端 episode（与官方 danmu_api 的
-    // `return resJson.bangumi.episodes` 一致）：episodeId / episodeNumber
-    // 保持服务端原始类型，Forward 的"当前集"匹配依赖这些原始值。
     var out = [];
     for (var k = 0; k < eps.length; k++) {
       var e = eps[k];
       if (!e || e.episodeId === undefined || e.episodeId === null) continue;
-      out.push(e);
+      out.push({
+        seasonId: e.seasonId,
+        episodeId: String(e.episodeId),
+        episodeTitle: String(e.episodeTitle || ""),
+        episodeNumber: e.episodeNumber,
+        airDate: e.airDate,
+        url: e.url
+      });
     }
 
     // 用户正在选集，趁这段时间把弹幕下好，点播放时直接命中缓存。
@@ -1833,8 +1794,6 @@ async function _danmuAt(params) {
 async function getCommentsById(params) {
   try {
     var list = await _danmuAt(params);
-    // 与官方 widgets/danmu.js 一致：原样返回服务端响应结构 { count, comments }。
-    // Forward 内置解析器认识这个结构（它比纯数组更明确，不会被误判为分段模式）。
     return { count: list.length, comments: list };
   } catch (e) {
     console.error(TAG, "getCommentsById 失败", e);
@@ -1842,18 +1801,3 @@ async function getCommentsById(params) {
   }
 }
 
-
-/**
- * 分段接口：Forward 会带 segmentTime 调用。
- * 服务端不支持按时间范围查询，这里直接返回整集全量，
- * 保证无论 Forward 走哪条链路拿到的都是完整弹幕。
- */
-async function getDanmuWithSegmentTime(params) {
-  try {
-    var list = await _danmuAt(params);
-    return { count: list.length, comments: list };
-  } catch (e) {
-    console.error(TAG, "getDanmuWithSegmentTime 失败", e);
-    throw e;
-  }
-}
