@@ -1,5 +1,5 @@
 /**
- * LogVar 弹幕API 弹幕模块（DandanPlay v2 兼容协议）
+ * 江砚弹幕模块（DandanPlay v2 兼容协议）
  *
  * 数据源: https://vidm.zhiaon.top/nzhyddtld
  *   GET  /api/v2/search/anime?keyword=<kw>        搜索番剧
