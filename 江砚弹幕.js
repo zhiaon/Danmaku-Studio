@@ -30,7 +30,7 @@ WidgetMetadata = {
   title: "江砚弹幕",
   version: "1.0.0",
   requiredVersion: "0.0.2",
-  description: "DandanPlay 兼容协议分段弹幕，本地缓存 + 二分定位，快速精准。",
+  description: "通用弹幕",
   author: "江砚",
   site: "https://vidm.zhiaon.top/nzhyddtld",
 
