@@ -20,7 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   3.0.0  当前版本（等价于稳定的 2.8.2，仅版本号变更）。
+ *   3.1.0  规范年份匹配：优先用服务端 startDate 字段，回退标题括号。
  *
  * 协议依据: InchStudio/ForwardWidgets
  *   widgets/segmentDanmuExample.js + README「弹幕分片加载流程」
@@ -31,7 +31,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.0.0",
+  version: "3.1.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -387,6 +387,22 @@ function _titleYear(t) {
   return m ? parseInt(m[1], 10) : null;
 }
 
+/**
+ * 从 anime 对象提取年份：优先服务端结构化 startDate 字段，回退标题括号。
+ * startDate 是服务端返回的规范开播日期（如 "2020-01-01T00:00:00Z"），
+ * 比标题括号正则更可靠——标题没带年份、或括号年份与实际开播年不符时仍能正确匹配。
+ */
+function _animeYear(a) {
+  if (a) {
+    var sd = a.startDate;
+    if (sd) {
+      var m = String(sd).match(/((?:19|20)\d{2})/);
+      if (m) return parseInt(m[1], 10);
+    }
+  }
+  return _titleYear(a && a.animeTitle);
+}
+
 /** 标题里的类型标签：【动漫】/【电视剧】/【3D网络放送】 → 标签文字 */
 function _titleTag(t) {
   var m = String(t || "").match(/【([^】]+)】/);
@@ -517,9 +533,9 @@ function _rank(animes, ctx) {
     if (wantLive !== null) s += (live === wantLive) ? 70 : -70;
     else if (liveHint !== null) s += (live === liveHint) ? 30 : -10;
 
-    // 4) 年份
+    // 4) 年份（优先 startDate 结构化字段，回退标题括号）
     if (wantYear) {
-      var ty = _titleYear(title);
+      var ty = _animeYear(a);
       if (ty) s += (Math.abs(ty - wantYear) <= 1) ? 40 : -40;
     }
 
@@ -876,6 +892,10 @@ function _inferYear(params) {
   var y = _titleYear(params.title) || _titleYear(params.seriesName);
   if (!y && params.year !== undefined && params.year !== null) y = parseInt(params.year, 10);
   if (!y && params.releaseYear !== undefined && params.releaseYear !== null) y = parseInt(params.releaseYear, 10);
+  if (!y && params.premiereDate) {
+    var m = String(params.premiereDate).match(/((?:19|20)\d{2})/);
+    if (m) y = parseInt(m[1], 10);
+  }
   return (isFinite(y) && y > 1900) ? y : null;
 }
 
@@ -1065,7 +1085,7 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
     if (_isJunk(a)) continue;
     if (params.type !== "movie" && _isMovie(a)) continue;
     if (wantLive !== null && _isLiveActionTitle(at) !== wantLive) continue;
-    var y = _titleYear(at);
+    var y = _animeYear(a);
     if (wantYear && y && Math.abs(y - wantYear) > 1) continue;
     // 镜像去重要在占名额之前做，否则 360 这类镜像会把真正有增量的源挤出候选
     var nt0 = _normTitle(at);
@@ -1113,6 +1133,7 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
       commentId: String(x.ep.episodeId), raw: raw, title: at2,
       source: String(x.a.source || ""), live: _isLiveActionTitle(at2),
       epCount: parseInt(x.a.episodeCount, 10) || 0,
+      year: _animeYear(x.a),
       globalNum: ((_firstRealEp(x.eps) || 0) > 1)
     };
   });
@@ -1141,13 +1162,13 @@ async function _collectPrimarySources(params, realEp, globalNumbering) {
     out = kept;
   }
 
-  var seedYear = _titleYear(out[0].title);
+  var seedYear = out[0].year || _titleYear(out[0].title);
   if (seedYear) {
     var sameYear = [];
     for (var n = 0; n < out.length; n++) {
       // 全局连续编号的季条目（凡人第三季第80话）不受年份限制
       if (out[n].globalNum) { sameYear.push(out[n]); continue; }
-      var cy = _titleYear(out[n].title);
+      var cy = out[n].year || _titleYear(out[n].title);
       if (!cy || Math.abs(cy - seedYear) <= 1) sameYear.push(out[n]);
     }
     if (sameYear.length !== out.length) {
@@ -1380,7 +1401,7 @@ async function _expandSources(params, server, seed, realEp, globalNumbering) {
     if (globalNumbering === false && seasonNum && _titleSeason(at) !== seasonNum) continue;
 
     // 年份：双方都有年份且不同，判为不同作品（重映/续作另算，这里保守跳过）
-    var y = _titleYear(at);
+    var y = _animeYear(a);
     if (wantYear && y && Math.abs(y - wantYear) > 1) continue;
 
     probes++;
