@@ -20,6 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
+ *   3.1.3  关闭 getDetail 里的选集预取，避免白下载。
  *   3.1.2  每次播放强制重新抓取，不读本地缓存（预取同步关闭）。
  *   3.1.1  缓存版本 9→11，作废此前抓取不全的旧缓存。
  *   3.1.0  规范年份匹配：优先用服务端 startDate 字段，回退标题括号。
@@ -33,7 +34,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.1.2",
+  version: "3.1.3",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -751,18 +752,7 @@ async function getDetailById(params) {
       });
     }
 
-    // 用户正在选集，趁这段时间把弹幕下好，点播放时直接命中缓存。
-    // Forward 传了 episode 才有意义；没传就跳过，交给播放时的正常加载。
-    if (!params.__noPrefetch && params.episode !== undefined && params.episode !== null) {
-      var preEp = parseInt(params.episode, 10);
-      if (isFinite(preEp) && preEp > 0) {
-        // 串行预取：先把当前集下完（用户最可能点这一集），再下下一集。
-        // 并发两集会平分带宽，弹幕大的剧（庆余年单集 3MB）两边都赶不上。
-        _prefetchEpisode(params, preEp).then(function () {
-          if (preEp + 1 <= out.length) _prefetchEpisode(params, preEp + 1);
-        });
-      }
-    }
+    // 每次播放都重抓，预取写进缓存也不会被读，跳过以节省流量。
     return out;
   } catch (e) {
     console.error(TAG, "getDetailById 失败", e);
