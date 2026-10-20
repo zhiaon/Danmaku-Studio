@@ -20,6 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
+ *   3.1.6  弹幕条目补回服务端 t 字段，修复面板少算约 400 条。
  *   3.1.5  弹幕完全不落盘：读缓存早已禁用，写入也一并移除，预热只热服务端。
  *   3.1.4  恢复选集预热：只为热服务端缓存(7.7s→0.7s)，模块仍不读本地缓存。
  *   3.1.3  关闭 getDetail 里的选集预取，避免白下载。
@@ -36,7 +37,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.1.5",
+  version: "3.1.6",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -1720,6 +1721,9 @@ function _buildIndex(rawList, loose) {
 
     var item = { p: p, m: m };
     if (d.cid !== undefined && d.cid !== null) item.cid = d.cid;
+    // t 是服务端给的整数秒时间戳，danmu_api 会原样返回；Forward 统计/渲染依赖它，
+    // 精简掉会让面板少算一部分弹幕（实测差 400 条左右）
+    if (d.t !== undefined && d.t !== null) item.t = d.t;
     slim.push(item);
     order.push([t, slim.length - 1]);
   }
