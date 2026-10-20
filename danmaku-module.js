@@ -20,6 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
+ *   3.1.5  弹幕完全不落盘：读缓存早已禁用，写入也一并移除，预热只热服务端。
  *   3.1.4  恢复选集预热：只为热服务端缓存(7.7s→0.7s)，模块仍不读本地缓存。
  *   3.1.3  关闭 getDetail 里的选集预取，避免白下载。
  *   3.1.2  每次播放强制重新抓取，不读本地缓存（预取同步关闭）。
@@ -35,7 +36,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.1.4",
+  version: "3.1.5",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -1649,8 +1650,7 @@ async function _loadEpisode(params) {
     items: idx.items,
     times: idx.times
   };
-  _sset(dk, rec);
-  _touch(dk, maxEp);
+  // 不写任何弹幕缓存：每次播放都重新请求服务端，避免历史数据残留
   _sdel(K_FAIL + dk);
   console.log(TAG, "弹幕加载完成", logical, "id=" + hit.commentId,
     "来源", n, "原始", idx.total, "有效", idx.items.length, "丢弃", idx.dropped);
