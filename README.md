@@ -6,30 +6,26 @@ ForwardWidget 弹幕模块，对接 DandanPlay v2 兼容协议的弹幕 API（da
 
 ## 特性
 
-- 🎯 **准确**：用 `/api/v2/match` 按文件名现场换取新鲜 `episodeId`，避开服务端缓存淘汰导致 ID 失效 404 的坑；透传 `commentId` 命中时直接跳过反查
-- 🧩 **完整**：同一集合并多个上游平台弹幕（qq / 爱奇艺 / 弹弹 …），单一来源会明显缺失（实测同集 14194 / 5701 / 6444 条）；合并后按 `时间(0.1s)+文本` 收敛去重
-- 🚫 **不数镜像**：qq 与 tencent 上游同源、弹幕 100% 重复，配额只对「新增弹幕>0」的来源计数，避免镜像吃满名额把真正的增量来源挡在门外
-- 💾 **缓存**：搜索 / 分集 / 整集弹幕三级 `Widget.storage` 缓存，重复进入零网络开销
-- 🛡️ **容错**：上游源失效返回空弹幕不阻断播放，失败进 5 分钟冷却不反复撞墙
+- 🎯 **自动匹配**：`searchDanmu` 按关键词搜索番剧，类型/季数过滤 + 相关性打分；`getDetailById` 返回分集列表供 Forward 自动选中对应集
+- 📡 **直连原样返回**：`getCommentsById` 拿到 `commentId` 后直接请求 `/api/v2/comment/{id}?withRelated=true&chConvert=1`，原样返回服务端数据，不做搜索/分集/合并/去重/精简——与 danmu_api 官方模块行为完全一致
+- 📅 **年份匹配**：优先用服务端 `startDate` 字段提取年份，标题无括号的条目也能正确匹配（如 `凡人修仙传 魔道争锋` → 2021）
+- 🚫 **不内置默认地址**：server 为空时不产生任何请求，避免误连
 
 ## 接入
 
 ```
-https://raw.githubusercontent.com/zhiaon/jiangyan-danmu/main/danmaku-module.js
+https://raw.githubusercontent.com/zhiaon/jiangyan-danmu/stable/danmaku-module.js
 ```
 
 导入后到模块设置里填写「弹幕服务器」，例如自部署的 danmu_api 地址 `https://{domain}/{token}`。
+
+> 地址末尾**不要带** `/`，否则会拼出 `//api` 导致 404。
 
 ## 参数（globalParams）
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | server | **必填** | 弹幕服务器基地址（DandanPlay v2 兼容协议），末尾不带 `/`。未填写时不产生任何弹幕 |
-| mergeSources | 3 | 同一集合并多少个上游平台的弹幕（0 = 单一来源，最快，上限 6） |
-| segmentSeconds | 180 | 分段窗口长度（秒） |
-| segmentPad | 3 | 窗口起点向前多取几秒，避免边界弹幕丢失 |
-| cacheHours | 24 | 分集列表与整集弹幕的本地缓存有效期（小时） |
-| maxCachedEpisodes | 5 | 整集弹幕缓存条数上限，超出淘汰最久未使用的 |
 
 ## 模块结构
 
@@ -37,8 +33,15 @@ https://raw.githubusercontent.com/zhiaon/jiangyan-danmu/main/danmaku-module.js
 |---|---|---|
 | `searchDanmu` | `searchDanmu` | 搜索番剧，类型/季数过滤 + 相关性打分 |
 | `getDetail` | `getDetailById` | 番剧分集列表，多季合并时按 seasonId 收窄 |
-| `getComments` | `getCommentsById` | 主弹幕入口，返回 `{count, comments}` |
+| `getComments` | `getCommentsById` | 主弹幕入口，直连 `/api/v2/comment/{commentId}` 原样返回 |
 
 ## 版本
 
-当前版本 **2.0.1**
+当前版本 **3.2.1**
+
+- **v3.2.1**：`getCommentsById` 完全照搬 danmu_api——单次请求、原样返回、失败直接抛错、无兜底
+- v3.2.0：直连 + 兜底（直连失败回退搜索/分集链路）
+- v3.1.7：补回 `like` 字段，与 danmu_api 完全对齐
+- v3.1.6：补回 `t` 字段
+- v3.1.5：弹幕完全不落盘（读写缓存均禁用）
+- v3.1.0：年份匹配从标题括号正则改为优先用服务端 `startDate`
