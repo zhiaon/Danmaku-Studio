@@ -20,6 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
+ *   3.1.1  缓存版本 9→11，作废此前抓取不全的旧缓存（2938 条 vs 12111 条）。
  *   3.1.0  规范年份匹配：优先用服务端 startDate 字段，回退标题括号。
  *
  * 协议依据: InchStudio/ForwardWidgets
@@ -31,7 +32,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.1.0",
+  version: "3.1.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -104,7 +105,7 @@ var FAIL_TTL = 5 * 60;
 
 // 弹幕抓取逻辑版本。改动「抓取方式 / 去重规则 / 返回内容」时 +1，
 // 旧缓存会因版本不符自动失效并重新抓取，避免升级后仍显示老数据。
-var CACHE_VERSION = 9;
+var CACHE_VERSION = 11;
 
 // 实测结论：本服务的 episodeId 是"当前缓存"的临时编号，缓存淘汰后 ID 立刻失效（服务端日志：
 //   error: [cache] No URL found for ID: 13126 / [LogVar-API] Comment with ID 13126 not found）。
