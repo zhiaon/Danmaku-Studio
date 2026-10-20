@@ -42,7 +42,7 @@ WidgetMetadata = {
   title: "江砚弹幕",
   version: "3.2.1",
   requiredVersion: "0.0.2",
-  description: "多平台弹幕合并，全量加载",
+  description: "弹幕直连，原样返回",
   author: "江砚",
   site: "https://github.com/zhiaon/jiangyan-danmu",
 
