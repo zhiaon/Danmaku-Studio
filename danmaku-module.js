@@ -20,6 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
+ *   3.1.4  恢复选集预热：只为热服务端缓存(7.7s→0.7s)，模块仍不读本地缓存。
  *   3.1.3  关闭 getDetail 里的选集预取，避免白下载。
  *   3.1.2  每次播放强制重新抓取，不读本地缓存（预取同步关闭）。
  *   3.1.1  缓存版本 9→11，作废此前抓取不全的旧缓存。
@@ -34,7 +35,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.1.3",
+  version: "3.1.4",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -752,7 +753,16 @@ async function getDetailById(params) {
       });
     }
 
-    // 每次播放都重抓，预取写进缓存也不会被读，跳过以节省流量。
+    // 预热服务端缓存：选集时后台请求一次整集弹幕，点播放时服务端已缓存(约 0.7s)。
+    // 模块自身仍不读本地缓存，播放时照样重新请求 —— 只是免去服务端现抓源站的 7 秒。
+    if (!params.__noPrefetch && params.episode !== undefined && params.episode !== null) {
+      var preEp = parseInt(params.episode, 10);
+      if (isFinite(preEp) && preEp > 0) {
+        _prefetchEpisode(params, preEp).then(function () {
+          if (preEp + 1 <= out.length) _prefetchEpisode(params, preEp + 1);
+        });
+      }
+    }
     return out;
   } catch (e) {
     console.error(TAG, "getDetailById 失败", e);
@@ -1545,6 +1555,7 @@ function _prefetchEpisode(params, epNo) {
     p.episode = String(epNo);
     p.commentId = "";
     p.__noPrefetch = true;
+    p.__warm = true;   // 预热请求：失败不写冷却，避免把播放也堵死
     console.log(TAG, "后台预取第" + epNo + "集");
     return _loadEpisode(p).then(function (r) { return r; }, function () { return null; });
   } catch (e) {
@@ -1607,12 +1618,12 @@ async function _loadEpisode(params) {
     }
     if (!hit) hit = await _resolveAndFetch(params);
   } catch (e) {
-    _markCooling(dk, e.message);
+    if (!params.__warm) _markCooling(dk, e.message);
     console.error(TAG, "弹幕解析失败，进入冷却", logical, e.message);
     return null;
   }
   if (!hit) {
-    _markCooling(dk, "ID 失效或上游无弹幕");
+    if (!params.__warm) _markCooling(dk, "ID 失效或上游无弹幕");
     console.error(TAG, "未取到弹幕，进入冷却", logical);
     return null;
   }
@@ -1623,7 +1634,7 @@ async function _loadEpisode(params) {
 
   var idx = _buildIndex(merged.raw, n > 1);
   if (idx.items.length === 0) {
-    _markCooling(dk, "弹幕全部无效");
+    if (!params.__warm) _markCooling(dk, "弹幕全部无效");
     return null;
   }
   rec = {
