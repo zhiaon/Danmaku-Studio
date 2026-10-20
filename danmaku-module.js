@@ -51,7 +51,7 @@ WidgetMetadata = {
       name: "server",
       title: "弹幕服务器",
       type: "input",
-      description: "DandanPlay v2 弹幕 API 基地址（danmu_api 兼容协议），末尾不带 /",
+      description: "弹幕服务器地址，末尾不带 /",
       placeholders: [
         { title: "示例 danmu_api", value: "https://{domain}/{token}" }
       ]
