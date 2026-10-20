@@ -20,6 +20,7 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
+ *   3.2.1  getCommentsById 与 danmu_api 完全一致：1 次请求、原样返回、无兜底。
  *   3.2.0  取弹幕改成 danmu_api 式直连：有 commentId 就直接请求并原样返回。
  *   3.1.7  弹幕条目补回 like 字段，与 danmu_api 原样返回完全对齐。
  *   3.1.6  弹幕条目补回服务端 t 字段，修复面板少算约 400 条。
@@ -39,7 +40,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.2.0",
+  version: "3.2.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -1823,40 +1824,26 @@ async function _danmuAt(params, full) {
  * 保证任何调用都拿到"一小段"而不是整集 1.3MB。
  */
 async function getCommentsById(params) {
-  try {
-    var server = _server(params);
-    var commentId = params.commentId ? String(params.commentId) : "";
+  var server = params.server;
+  var commentId = params.commentId;
 
-    // 与 danmu_api 一致：Forward 给了 commentId 就直接请求，服务端原样返回。
-    // 不做搜索/分集/多源合并/精简 —— 这些步骤正是之前少弹幕的来源。
-    if (commentId) {
-      try {
-        var data = _unwrap(
-          await Widget.http.get(
-            server + "/api/v2/comment/" + encodeURIComponent(commentId) + "?withRelated=true&chConvert=1",
-            { headers: _headers(params) }
-          ),
-          "获取弹幕"
-        );
-        var arr = data && (Array.isArray(data.comments) ? data.comments
-          : (Array.isArray(data.barrage_list) ? data.barrage_list : null));
-        if (arr && arr.length > 0) {
-          console.log(TAG, "commentId=" + commentId, "直连返回", arr.length, "条");
-          return data;
-        }
-        console.log(TAG, "commentId=" + commentId, "直连无弹幕，回退完整链路");
-      } catch (e) {
-        console.error(TAG, "直连失败，回退完整链路", e.message);
+  if (!commentId) return null;
+
+  // 与 danmu_api 完全一致：一次请求、原样返回、失败直接抛错、无兜底
+  var response = await Widget.http.get(
+    server + "/api/v2/comment/" + commentId + "?withRelated=true&chConvert=1",
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "ForwardWidgets/1.0.0"
       }
     }
+  );
 
-    // 兜底：没有 commentId 或直连拿不到弹幕时，走原来的搜索/分集/合并链路
-    var list = await _danmuAt(params, true);
-    return { count: list.length, comments: list };
-  } catch (e) {
-    console.error(TAG, "getCommentsById 失败", e);
-    throw e;
-  }
+  if (!response) throw new Error("获取数据失败");
+
+  var data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+  return data;
 }
 
 /**
