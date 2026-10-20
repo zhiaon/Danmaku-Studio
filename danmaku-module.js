@@ -20,7 +20,8 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
- *   3.1.1  缓存版本 9→11，作废此前抓取不全的旧缓存（2938 条 vs 12111 条）。
+ *   3.1.2  每次播放强制重新抓取，不读本地缓存（预取同步关闭）。
+ *   3.1.1  缓存版本 9→11，作废此前抓取不全的旧缓存。
  *   3.1.0  规范年份匹配：优先用服务端 startDate 字段，回退标题括号。
  *
  * 协议依据: InchStudio/ForwardWidgets
@@ -32,7 +33,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.1.1",
+  version: "3.1.2",
   requiredVersion: "0.0.2",
   description: "多平台弹幕合并，全量加载",
   author: "江砚",
@@ -1585,13 +1586,9 @@ async function _loadEpisode(params) {
     return null;
   }
 
-  var rec = _scache(dk, ttl);
-  // 缓存版本不符（模块升级过抓取逻辑）→ 作废旧记录重新抓，否则会一直显示老数据
-  if (rec && rec.cv !== CACHE_VERSION) {
-    console.log(TAG, "缓存版本" + (rec.cv || "旧") + "≠" + CACHE_VERSION + "，作废重抓", logical);
-    _sdel(dk);
-    rec = null;
-  }
+  // 每次播放都重新抓取：跳过本地缓存读取，避免命中抓取不全的历史记录。
+  // 写入缓存仍然保留（同一会话内多次调用可复用），只是不再从这里读。
+  var rec = null;
   if (rec && Array.isArray(rec.items) && Array.isArray(rec.times)) {
     console.log(TAG, "命中本地缓存", logical, rec.items.length, "条");
     _touch(dk, maxEp);   // 命中也更新访问时间，LRU 才准
@@ -1657,11 +1654,7 @@ async function _loadEpisode(params) {
   console.log(TAG, "弹幕加载完成", logical, "id=" + hit.commentId,
     "来源", n, "原始", idx.total, "有效", idx.items.length, "丢弃", idx.dropped);
 
-  // 预取下一集：连续追剧时下一集直接命中缓存
-  if (!params.__noPrefetch) {
-    var snNow = parseInt(params.episode, 10);
-    if (isFinite(snNow) && snNow > 0) _prefetchEpisode(params, snNow + 1);
-  }
+  // 每次播放都重抓，预取结果不会被读取，跳过以节省流量
   return rec;
 }
 
