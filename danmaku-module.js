@@ -42,7 +42,7 @@ WidgetMetadata = {
   title: "江砚弹幕",
   version: "3.2.1",
   requiredVersion: "0.0.2",
-  description: "弹幕直连，原样返回",
+  description: "多平台弹幕聚合，统一加载",
   author: "江砚",
   site: "https://github.com/zhiaon/jiangyan-danmu",
 
@@ -51,7 +51,7 @@ WidgetMetadata = {
       name: "server",
       title: "弹幕服务器",
       type: "input",
-      description: "弹幕服务器地址，末尾不带 /",
+      description: "DandanPlay v2 弹幕服务接口，兼容 danmu_api 协议，填写时请勿在末尾添加 /",
       placeholders: [
         { title: "示例 danmu_api", value: "https://{domain}/{token}" }
       ]
