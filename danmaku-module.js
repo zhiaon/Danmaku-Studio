@@ -40,7 +40,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.2.1",
+  version: "3.3.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -113,7 +113,7 @@ var FAIL_TTL = 5 * 60;
 
 // 弹幕抓取逻辑版本。改动「抓取方式 / 去重规则 / 返回内容」时 +1，
 // 旧缓存会因版本不符自动失效并重新抓取，避免升级后仍显示老数据。
-var CACHE_VERSION = 11;
+var CACHE_VERSION = 12;
 
 // 实测结论：本服务的 episodeId 是"当前缓存"的临时编号，缓存淘汰后 ID 立刻失效（服务端日志：
 //   error: [cache] No URL found for ID: 13126 / [LogVar-API] Comment with ID 13126 not found）。
@@ -698,30 +698,25 @@ async function getDetailById(params) {
     var animeId = params.animeId;
     if (!animeId) throw new Error("缺少 animeId");
 
-    var ttl = _num(params.cacheHours, DEFAULT_CACHE_HOURS) * 3600;
-    var key = K_BANGUMI + animeId;
-    var rec = _scache(key, ttl);
-
-    if (!rec || !Array.isArray(rec.episodes)) {
-      var data = _unwrap(
-        await Widget.http.get(server + "/api/v2/bangumi/" + encodeURIComponent(animeId), { headers: _headers(params) }),
-        "获取分集"
-      );
-      var bangumi = data && data.bangumi;
-      if (!bangumi) {
-        if (data && data.success === false) throw new Error("获取分集失败: " + (data.errorMessage || ""));
-        return [];
-      }
-      rec = {
-        t: _now(),
-        animeId: String(animeId),
-        animeTitle: String(bangumi.animeTitle || ""),
-        seasons: bangumi.seasons || [],
-        episodes: Array.isArray(bangumi.episodes) ? bangumi.episodes : []
-      };
-      _sset(key, rec);
-      console.log(TAG, "番剧", animeId, "共", rec.episodes.length, "集，已缓存");
+    // 分集列表必须实时：剧集在持续更新（嫁金钗从 12 集涨到 14 集），
+    // 一旦缓存，新集就不会出现在 Forward 的分集面板里，导致新集无弹幕。
+    var data = _unwrap(
+      await Widget.http.get(server + "/api/v2/bangumi/" + encodeURIComponent(animeId), { headers: _headers(params) }),
+      "获取分集"
+    );
+    var bangumi = data && data.bangumi;
+    if (!bangumi) {
+      if (data && data.success === false) throw new Error("获取分集失败: " + (data.errorMessage || ""));
+      return [];
     }
+    var rec = {
+      t: _now(),
+      animeId: String(animeId),
+      animeTitle: String(bangumi.animeTitle || ""),
+      seasons: bangumi.seasons || [],
+      episodes: Array.isArray(bangumi.episodes) ? bangumi.episodes : []
+    };
+    console.log(TAG, "番剧", animeId, "共", rec.episodes.length, "集（实时）");
 
     // 多季合并的番剧：按 seasonId 收窄，客户端就不用猜哪集是第几季
     var eps = rec.episodes;
@@ -1276,11 +1271,8 @@ async function _cachedSearchList(params, keyword) {
   }
 }
 
-/** 分集列表（带缓存）。force=true 忽略缓存强刷 —— episodeId 会随上游缓存淘汰失效 */
+/** 分集列表（实时）。不读本地缓存：剧集持续更新，缓存会让新集消失 */
 async function _cachedBangumi(params, animeId, force) {
-  var key = K_BANGUMI + animeId;
-  var rec = force ? null : _scache(key, _num(params.cacheHours, DEFAULT_CACHE_HOURS) * 3600);
-  if (rec && Array.isArray(rec.episodes)) return rec.episodes;
   try {
     var data = _unwrap(
       await Widget.http.get(_server(params) + "/api/v2/bangumi/" + encodeURIComponent(animeId), { headers: _headers(params) }),
@@ -1288,14 +1280,7 @@ async function _cachedBangumi(params, animeId, force) {
     );
     var bangumi = data && data.bangumi;
     if (!bangumi) return [];
-    rec = {
-      t: _now(), animeId: animeId,
-      animeTitle: String(bangumi.animeTitle || ""),
-      seasons: bangumi.seasons || [],
-      episodes: Array.isArray(bangumi.episodes) ? bangumi.episodes : []
-    };
-    _sset(key, rec);
-    return rec.episodes;
+    return Array.isArray(bangumi.episodes) ? bangumi.episodes : [];
   } catch (e) {
     console.error(TAG, "分集列表失败", animeId, e.message);
     return [];
