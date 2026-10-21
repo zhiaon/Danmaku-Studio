@@ -3,13 +3,12 @@
  *
  * 数据源: 由「弹幕服务器」参数指定（DandanPlay v2 兼容协议，如 danmu_api 自部署实例）
  *   POST /api/v2/match   {fileName:"..."}    自动匹配（剧集：标题+季集合成文件名）
- *   GET  /api/v2/search/anime?keyword=<kw>   电影兜底（无集号时用）
  *   GET  /api/v2/bangumi/:animeId            分集列表
  *   GET  /api/v2/comment/:commentId          整集弹幕
  *
  * 设计原则：只做协议转换，不加工数据
  *   1) 三个环节全部实时请求，本地零缓存，每次播放都是最新数据；
- *   2) 剧集自动匹配走 match，电影无集号时走 search/anime；
+ *   2) 自动匹配只走 match；
  *   3) 分集列表原样返回，只按 seasonId 收窄多季番剧；
  *   4) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
  *
@@ -29,7 +28,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.0.0",
+  version: "4.0.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -187,15 +186,8 @@ async function searchDanmu(params) {
     // 电影：没有集号，match 无从比对，走 search/anime 拿候选。
     var epNum = parseInt(params.episode, 10);
     if (!isFinite(epNum) || epNum <= 0) {
-      console.log(TAG, "无集数（电影/单集），走 search/anime", keyword);
-      var mv = _unwrap(
-        await Widget.http.get(server + "/api/v2/search/anime?keyword=" + encodeURIComponent(keyword), { headers: _headers(params) }),
-        "搜索电影"
-      );
-      if (!mv || mv.success === false) return { animes: [] };
-      var ma = Array.isArray(mv.animes) ? mv.animes : [];
-      console.log(TAG, "搜索", keyword, "命中", ma.length, "条（电影）");
-      return { animes: ma };
+      console.log(TAG, "无集数（电影/单集），match 无从比对，返回空列表");
+      return { animes: [] };
     }
 
     var hits = await _matchAnimeByName(params, keyword, season);
