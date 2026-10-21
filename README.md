@@ -14,7 +14,7 @@ ForwardWidget 弹幕模块，对接 DandanPlay v2 兼容协议的弹幕 API（da
 ## 接入
 
 ```
-https://raw.githubusercontent.com/zhiaon/jiangyan-danmu/stable/danmaku-module.js
+https://raw.githubusercontent.com/zhiaon/jiangyan-danmu/main/danmaku-module.js
 ```
 
 导入后到模块设置里填写「弹幕服务器」，例如自部署的 danmu_api 地址 `https://{domain}/{token}`。
