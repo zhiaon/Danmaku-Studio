@@ -20,6 +20,8 @@
  *   8) commentId 缺失时用 match 接口按 "系列名 SxxEyy" 文件名反查。
  *
  * 版本记录
+ *   3.3.4  searchDanmu 并发调用 /api/v2/match，命中的番剧置顶（search 仍作候选来源与兜底）。
+ *   3.3.3  searchDanmu 排序完全对齐 danmu_api（季数匹配优先 + 原序）。
  *   3.2.1  getCommentsById 与 danmu_api 完全一致：1 次请求、原样返回、无兜底。
  *   3.2.0  取弹幕改成 danmu_api 式直连：有 commentId 就直接请求并原样返回。
  *   3.1.7  弹幕条目补回 like 字段，与 danmu_api 原样返回完全对齐。
@@ -40,7 +42,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.3.3",
+  version: "3.3.4",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -590,8 +592,12 @@ async function searchDanmu(params) {
     }
 
     // 搜索不做本地缓存：每次播放都实时请求
+    // match 与 search 并发：match 只负责给"命中番剧"排位，search 仍然是候选列表的来源
     var url = server + "/api/v2/search/anime?keyword=" + encodeURIComponent(keyword);
-    var data = _unwrap(await Widget.http.get(url, { headers: _headers(params) }), "搜索弹幕");
+    var searchP = Widget.http.get(url, { headers: _headers(params) });
+    var matchP = _matchAnimeByName(params, keyword, season);
+    var data = _unwrap(await searchP, "搜索弹幕");
+    var hit = await matchP;
     if (!data) return { animes: [] };
     if (data.success === false) {
       throw new Error("搜索弹幕失败: " + (data.errorMessage || "服务返回失败"));
@@ -619,10 +625,61 @@ async function searchDanmu(params) {
       }
     }
 
+    // 文件名匹配命中的番剧置顶：Forward 自动匹配默认取首个候选
+    if (hit) {
+      var hid = String(hit.animeId);
+      var hIdx = -1;
+      for (var k = 0; k < animes.length; k++) {
+        if (animes[k] && String(animes[k].animeId) === hid) { hIdx = k; break; }
+      }
+      if (hIdx > 0) {
+        var top = animes.splice(hIdx, 1)[0];
+        animes.unshift(top);
+        console.log(TAG, "匹配命中置顶", hid, String(top.animeTitle || ""));
+      } else if (hIdx === 0) {
+        console.log(TAG, "匹配命中已在首位", hid);
+      } else {
+        console.log(TAG, "匹配命中", hid, "但不在搜索结果中，保持原序");
+      }
+    }
+
     return { animes: animes };
   } catch (e) {
     console.error(TAG, "searchDanmu 失败", e);
     throw e;
+  }
+}
+
+/**
+ * 用「标题 + 季集」合成文件名调 /api/v2/match，命中返回原始 match 条目。
+ * Forward 的 searchDanmu 拿不到真实文件名，只能合成；实测 "标题.S01E01.mkv" 命中率最高。
+ * 命中只用于给候选排位，最终集号仍由 getDetailById 的 episodes 决定。
+ */
+async function _matchAnimeByName(params, title, season) {
+  var ep = parseInt(params && params.episode, 10);
+  if (!isFinite(ep) || ep <= 0) return null;      // 没有集数，match 无从比对
+  var sn = parseInt(season, 10);
+  if (!isFinite(sn) || sn <= 0) sn = 1;
+  var fileName = title + ".S" + (sn < 10 ? "0" : "") + sn +
+                 "E" + (ep < 10 ? "0" : "") + ep + ".mkv";
+  try {
+    var resp = await Widget.http.post(
+      _server(params) + "/api/v2/match",
+      JSON.stringify({ fileName: fileName }),
+      { headers: _headers(params) }
+    );
+    var data = _unwrap(resp, "文件名匹配");
+    var hit = data && data.isMatched && Array.isArray(data.matches) && data.matches[0];
+    if (!hit || hit.animeId === undefined || hit.animeId === null) {
+      console.log(TAG, "匹配", fileName, "→ 未命中");
+      return null;
+    }
+    console.log(TAG, "匹配", fileName, "→", hit.animeId, String(hit.animeTitle || ""),
+      "#" + String(hit.episodeTitle || ""));
+    return hit;
+  } catch (e) {
+    console.error(TAG, "匹配", fileName, "失败", e.message);
+    return null;
   }
 }
 
