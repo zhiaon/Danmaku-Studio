@@ -8,7 +8,8 @@ ForwardWidget 弹幕模块，对接 DandanPlay v2 兼容协议的弹幕 API（da
 
 - 🎯 **实时请求**：搜索、分集、弹幕三个环节每次播放都重新请求服务器，本地零缓存、零残留，数据始终最新
 - 📡 **直连原样返回**：`getCommentsById` 拿到 `commentId` 后直接请求 `/api/v2/comment/{id}?withRelated=true&chConvert=1`，原样返回服务端数据，不做搜索/分集/合并/去重/精简
-- 🎯 **只用 match**：搜索环节完全走 `/api/v2/match`（文件名用「标题.S01E01.mkv」合成），不再请求 `/api/v2/search/anime`
+- 🎯 **剧集走 match**：用「标题.S01E01.mkv」合成文件名调 `/api/v2/match`，一步精确到集
+- 🎬 **电影走 search**：没有集号时 match 无法比对，自动改走 `/api/v2/search/anime` 取候选
 - 🪶 **只做协议转换**：整份文件 405 行、14 个函数，没有多源合并/打分/切片/集号推断等中间层，读一遍就能看完全部行为
 - 🚫 **不内置默认地址**：server 为空时不产生任何请求，避免误连
 
@@ -32,7 +33,7 @@ https://raw.githubusercontent.com/zhiaon/jiangyan-danmu/main/danmaku-module.js
 
 | id | 函数 | 作用 |
 |---|---|---|
-| `searchDanmu` | `searchDanmu` | 番剧匹配：只走 `/api/v2/match`，用合成文件名精确定位 |
+| `searchDanmu` | `searchDanmu` | 剧集走 `/api/v2/match`，电影走 `/api/v2/search/anime` |
 | `getDetail` | `getDetailById` | 番剧分集列表，实时请求，原样返回 |
 | `getComments` | `getCommentsById` | 主弹幕入口，直连 `/api/v2/comment/{commentId}` 原样返回 |
 
