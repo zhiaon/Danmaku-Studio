@@ -8,7 +8,7 @@
  *   POST /api/v2/match   {fileName:"..."}         按文件名反查 episodeId（兜底）
  *
  * 为什么"准确且快"
- *   1) 搜索 / 分集 / 整集弹幕全部落 Widget.storage，重复进片头不重复请求；
+ *   1) 搜索 / 分集 / 整集弹幕全部实时请求，本地零缓存，每次播放都是最新数据；
  *   2) 本地只保留 {p,m,cid} 瘦字段并排序，另存一份纯数字时间数组；
  *   3) 分段定位用二分查找 [start,end)，14000 条弹幕的窗口切分是 O(log n)；
  *   4) 只把当前分段（默认 180 秒）回给客户端，绝不把 1.3MB 整集直发；
@@ -40,7 +40,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.3.1",
+  version: "3.3.2",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -113,7 +113,7 @@ var FAIL_TTL = 5 * 60;
 
 // 弹幕抓取逻辑版本。改动「抓取方式 / 去重规则 / 返回内容」时 +1，
 // 旧缓存会因版本不符自动失效并重新抓取，避免升级后仍显示老数据。
-var CACHE_VERSION = 12;
+var CACHE_VERSION = 13;
 
 // 实测结论：本服务的 episodeId 是"当前缓存"的临时编号，缓存淘汰后 ID 立刻失效（服务端日志：
 //   error: [cache] No URL found for ID: 13126 / [LogVar-API] Comment with ID 13126 not found）。
@@ -198,51 +198,8 @@ function _unwrap(resp, what) {
   return resp.data;
 }
 
-// ============================ 本地缓存 ============================
-
-/** Widget.storage 全部 try/catch，避免个别 key 损坏炸掉整个模块 */
-function _sget(key) {
-  try { return Widget.storage.get(key); } catch (e) { return null; }
-}
-
-function _sset(key, value) {
-  try { Widget.storage.set(key, value); }
-  catch (e) { console.error(TAG, "缓存写入失败", key, e); }
-}
-
-function _sdel(key) {
-  try { if (key) Widget.storage.remove(key); } catch (e) { /* 忽略 */ }
-}
-
-/** 读缓存并校验 TTL，过期自动清 */
-function _scache(key, ttlSeconds) {
-  var rec = _sget(key);
-  if (!rec || typeof rec !== "object") return null;
-  if (!_nowOk(rec.t, ttlSeconds)) { _sdel(key); return null; }
-  return rec;
-}
-
-function _nowOk(savedAt, ttlSeconds) {
-  return typeof savedAt === "number" && (_now() - savedAt) < ttlSeconds;
-}
-
-/** 缓存淘汰：FIFO 按最近访问排序，超量删除最久的整集弹幕。入参 key 已是完整存储键 */
-function _touch(key, maxEpisodes) {
-  try {
-    var idx = _sget(K_IDX);
-    if (!Array.isArray(idx)) idx = [];
-    var kept = [];
-    for (var i = 0; i < idx.length; i++) {
-      if (idx[i] && idx[i].k && idx[i].k !== key) kept.push(idx[i]);
-    }
-    kept.unshift({ k: key, t: _now() });
-    if (kept.length > maxEpisodes) {
-      for (var j = maxEpisodes; j < kept.length; j++) _sdel(kept[j].k);
-      kept.length = maxEpisodes;
-    }
-    _sset(K_IDX, kept);
-  } catch (e) { /* 淘汰失败不影响主流程 */ }
-}
+// ============================ 无本地缓存 ============================
+// 搜索 / 分集 / 弹幕全部实时请求，模块不读写 Widget.storage。
 
 // ============================ 标题规范化 ============================
 
@@ -633,21 +590,15 @@ async function searchDanmu(params) {
       return { animes: [] };
     }
 
-    var ttl = SEARCH_CACHE_HOURS * 3600;
-    var key = K_SEARCH + _hash(keyword + "|" + season + "|v" + CACHE_VERSION);
-    var rec = _scache(key, ttl);
-
-    if (!rec || !Array.isArray(rec.list)) {
-      var url = server + "/api/v2/search/anime?keyword=" + encodeURIComponent(keyword);
-      var data = _unwrap(await Widget.http.get(url, { headers: _headers(params) }), "搜索弹幕");
-      if (!data) return { animes: [] };
-      if (data.success === false) {
-        throw new Error("搜索弹幕失败: " + (data.errorMessage || "服务返回失败"));
-      }
-      rec = { t: _now(), list: Array.isArray(data.animes) ? data.animes : [] };
-      _sset(key, rec);
-      console.log(TAG, "搜索", keyword, "命中", rec.list.length, "条，已缓存");
+    // 搜索不做本地缓存：每次播放都实时请求，避免新剧/新来源被旧结果挡住
+    var url = server + "/api/v2/search/anime?keyword=" + encodeURIComponent(keyword);
+    var data = _unwrap(await Widget.http.get(url, { headers: _headers(params) }), "搜索弹幕");
+    if (!data) return { animes: [] };
+    if (data.success === false) {
+      throw new Error("搜索弹幕失败: " + (data.errorMessage || "服务返回失败"));
     }
+    var rec = { t: _now(), list: Array.isArray(data.animes) ? data.animes : [] };
+    console.log(TAG, "搜索", keyword, "命中", rec.list.length, "条（实时）");
 
     // 不再在搜索阶段按季号硬筛：完整版（斗罗大陆 267 集、凡人 197 集）
     // 标题里没有「第1季」，一筛就整批消失，反而只剩动态漫碎片。
@@ -1238,21 +1189,20 @@ async function _resolveAndFetch(params) {
   return null;
 }
 
-/** 该集是否处于"已知失败"冷却期：是则直接当空弹幕处理，不再发请求 */
+/** 失败冷却只存在内存里，单次播放会话有效，不落盘 */
+var _coolMap = Object.create(null);
+
 function _isCooling(danmuKey) {
-  var rec = _scache(K_FAIL + danmuKey, FAIL_TTL);
-  return !!(rec && rec.cool);
+  var t = _coolMap[danmuKey];
+  return !!t && (_now() - t) < FAIL_TTL;
 }
 
 function _markCooling(danmuKey, reason) {
-  _sset(K_FAIL + danmuKey, { t: _now(), cool: true, reason: reason });
+  _coolMap[danmuKey] = _now();
 }
 
-/** 搜索列表（带缓存，不做季数过滤/排序，供多来源合并复用） */
+/** 搜索列表（实时请求，不做季数过滤/排序，供多来源合并复用） */
 async function _cachedSearchList(params, keyword) {
-  var key = K_SEARCH + _hash(keyword + "|v" + CACHE_VERSION);
-  var rec = _scache(key, SEARCH_CACHE_HOURS * 3600);
-  if (rec && Array.isArray(rec.list)) return rec.list;
   try {
     var data = _unwrap(
       await Widget.http.get(
@@ -1262,9 +1212,7 @@ async function _cachedSearchList(params, keyword) {
       "搜索弹幕"
     );
     if (!data || data.success === false) return [];
-    rec = { t: _now(), list: Array.isArray(data.animes) ? data.animes : [] };
-    _sset(key, rec);
-    return rec.list;
+    return Array.isArray(data.animes) ? data.animes : [];
   } catch (e) {
     console.error(TAG, "搜索列表失败", keyword, e.message);
     return [];
@@ -1582,7 +1530,6 @@ async function _loadEpisode(params) {
   var rec = null;
   if (rec && Array.isArray(rec.items) && Array.isArray(rec.times)) {
     console.log(TAG, "命中本地缓存", logical, rec.items.length, "条");
-    _touch(dk, maxEp);   // 命中也更新访问时间，LRU 才准
     // 缓存命中也继续预取下一集，否则连播时从第二集起就断了预取链
     if (!params.__noPrefetch) {
       var snHit = parseInt(params.episode, 10);
@@ -1640,7 +1587,7 @@ async function _loadEpisode(params) {
     times: idx.times
   };
   // 不写任何弹幕缓存：每次播放都重新请求服务端，避免历史数据残留
-  _sdel(K_FAIL + dk);
+  delete _coolMap[dk];
   console.log(TAG, "弹幕加载完成", logical, "id=" + hit.commentId,
     "来源", n, "原始", idx.total, "有效", idx.items.length, "丢弃", idx.dropped);
 
