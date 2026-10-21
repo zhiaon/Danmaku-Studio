@@ -37,8 +37,9 @@ https://raw.githubusercontent.com/zhiaon/jiangyan-danmu/main/danmaku-module.js
 
 ## 版本
 
-当前版本 **3.3.2**
+当前版本 **3.3.3**
 
+- **v3.3.3**：searchDanmu 排序改为与 danmu_api 完全一致（季数匹配优先 + 原序），不再做自有打分/类型偏好/剔除
 - **v3.3.2**：搜索也不再缓存，模块彻底不读写 Widget.storage，每次播放全部实时请求
 - **v3.3.1**：分集列表改为实时请求，剧集更新后新集立即出现（此前的 24 小时缓存会让新集消失）
 - **v3.2.1**：`getCommentsById` 完全照搬 danmu_api——单次请求、原样返回、失败直接抛错、无兜底

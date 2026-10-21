@@ -40,7 +40,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "3.3.2",
+  version: "3.3.3",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -575,65 +575,80 @@ function _rank(animes, ctx) {
 // ============================ 1. 搜索弹幕 ============================
 
 /**
- * 搜索弹幕：按系列名调 LogVar 搜索接口，过滤类型/季数，打分排序后返回。
- *
- * 缓存：关键词 → 原始搜索列表（不预先按季过滤，换个季还能复用同一份缓存）。
+ * 搜索弹幕：与 danmu_api 完全一致——直接用 title 搜索，季数匹配的排前面，其余保持服务端顺序。
  */
 async function searchDanmu(params) {
   try {
     var server = _server(params);
     var season = params.season !== undefined && params.season !== null
       ? String(params.season) : "";
-    var keyword = _pickKeyword(params);
+    var keyword = params.title || "";
+
     if (!keyword) {
       console.log(TAG, "搜索关键词为空，返回空列表");
       return { animes: [] };
     }
 
-    // 搜索不做本地缓存：每次播放都实时请求，避免新剧/新来源被旧结果挡住
+    // 搜索不做本地缓存：每次播放都实时请求
     var url = server + "/api/v2/search/anime?keyword=" + encodeURIComponent(keyword);
     var data = _unwrap(await Widget.http.get(url, { headers: _headers(params) }), "搜索弹幕");
     if (!data) return { animes: [] };
     if (data.success === false) {
       throw new Error("搜索弹幕失败: " + (data.errorMessage || "服务返回失败"));
     }
-    var rec = { t: _now(), list: Array.isArray(data.animes) ? data.animes : [] };
-    console.log(TAG, "搜索", keyword, "命中", rec.list.length, "条（实时）");
+    var animes = Array.isArray(data.animes) ? data.animes : [];
+    console.log(TAG, "搜索", keyword, "命中", animes.length, "条（实时）");
 
-    // 不再在搜索阶段按季号硬筛：完整版（斗罗大陆 267 集、凡人 197 集）
-    // 标题里没有「第1季」，一筛就整批消失，反而只剩动态漫碎片。
-    // 季号冲突交给 _rank 的 -45 降权处理，完整版始终保留。
-    var pool = rec.list;
-
-    // 类型表决：Forward 没给明确信号时，按候选中占多数的类型给弱偏好。
-    // 同名真人剧和动漫并存时（凡人修仙传 2020 动画 vs 2025 电视剧），
-    // 多数派排前面，少数派仍然保留，用户手动也能选到。
-    var wantLive = _inferLiveAction(params);
-    var liveHint = null;
-    if (wantLive === null) {
-      var lc = 0, ac = 0;
-      for (var q = 0; q < pool.length; q++) {
-        if (_isLiveActionTitle(pool[q] && pool[q].animeTitle)) lc++;
-        else ac++;
+    // 排序与 danmu_api 一致
+    if (season) {
+      var matched = [], nonMatched = [];
+      var isMovie = keyword.indexOf("电影") >= 0 || keyword.indexOf("movie") >= 0;
+      for (var i = 0; i < animes.length; i++) {
+        if (_matchSeasonDanmu(animes[i], keyword, season) && !isMovie) matched.push(animes[i]);
+        else nonMatched.push(animes[i]);
       }
-      if (lc > 0 && ac > 0) liveHint = lc > ac;
-      console.log(TAG, "类型表决：动漫 " + ac + " / 真人剧 " + lc +
-        (liveHint === null ? "" : (" → 偏好" + (liveHint ? "真人剧" : "动漫"))));
+      animes = matched.concat(nonMatched);
+    } else {
+      var isMov = keyword.indexOf("电影") >= 0 || keyword.indexOf("movie") >= 0;
+      if (isMov) {
+        var m2 = [], n2 = [];
+        for (var j = 0; j < animes.length; j++) {
+          if (isMov) m2.push(animes[j]); else n2.push(animes[j]);
+        }
+        animes = m2.concat(n2);
+      }
     }
 
-    return { animes: _rank(pool, {
-      type: params.type,
-      keyword: keyword,
-      live: wantLive,
-      liveHint: liveHint,
-      link: params.link,
-      year: _inferYear(params),
-      season: isFinite(parseInt(season, 10)) ? parseInt(season, 10) : null
-    }) };
+    return { animes: animes };
   } catch (e) {
     console.error(TAG, "searchDanmu 失败", e);
     throw e;
   }
+}
+
+/** 季数匹配（与 danmu_api matchSeason 一致） */
+function _matchSeasonDanmu(anime, queryTitle, season) {
+  if (!anime || !anime.animeTitle) return false;
+  var at = String(anime.animeTitle);
+  if (at.indexOf(queryTitle) < 0) return false;
+  var title = at.split("(")[0].trim();
+  if (!title.startsWith(queryTitle)) return false;
+  var after = title.substring(queryTitle.length).trim();
+  if (after === "" && String(season) === "1") return true;
+  var m = after.match(/\d+/);
+  if (m && m[0] === String(season)) return true;
+  var cm = after.match(/[一二三四五六七八九十壹贰叁肆伍陆柒捌玖拾]+/);
+  if (cm && String(_cn2num(cm[0])) === String(season)) return true;
+  return false;
+}
+
+function _cn2num(s) {
+  if (/^\d+$/.test(s)) return Number(s);
+  var map = { "一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10,
+    "壹":1,"贰":2,"叁":3,"肆":4,"伍":5,"陆":6,"柒":7,"捌":8,"玖":9,"拾":10 };
+  var n = 0;
+  for (var i = 0; i < s.length; i++) n = n * 10 + (map[s[i]] || 0);
+  return n;
 }
 
 // ============================ 2. 获取分集 ============================
