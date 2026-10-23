@@ -19,7 +19,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.1.1",
+  version: "4.1.2",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -249,7 +249,7 @@ async function _matchAnimeByName(params, title, season) {
     fileName = title + ".S" + (sn < 10 ? "0" : "") + sn +
                "E" + (ep < 10 ? "0" : "") + ep + ".mkv";
   } else {
-    fileName = title + ".mkv";                    // 电影/无季集：纯标题
+    fileName = title;                             // 电影/无季集：纯标题（带后缀必失配）
   }
   try {
     var resp = await Widget.http.post(
