@@ -19,7 +19,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.0.9",
+  version: "4.1.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -121,6 +121,18 @@ function _unwrap(resp, what) {
 
 // ============================ 标题规范化 ============================
 
+/** 候选去重键：去掉来源后缀与类型标注，并抹平括号/书名号/空格差异 */
+function _titleKey(title) {
+  var t = String(title || "");
+  t = t.replace(/\s*from\s+.*$/i, "");
+  t = t.replace(/【[^】]*】/g, "");
+  t = t.replace(/（/g, "(").replace(/）/g, ")");
+  t = t.replace(/[()]/g, "");
+  t = t.replace(/[《》]/g, "");
+  t = t.replace(/[·・\s]/g, "");
+  return t;
+}
+
 function _seasonHit(anime, season) {
   if (!season) return false;
   var s = String(season).trim();
@@ -206,13 +218,14 @@ async function searchDanmu(params) {
     if (!mv || mv.success === false) return { animes: [] };
     var ma = Array.isArray(mv.animes) ? mv.animes : [];
     console.log(TAG, "fallback search", keyword, "命中", ma.length, "条");
-    // 按 animeId 去重（同片多平台来源只保留一条）
+    // 按标题归一化去重（同片多平台来源只保留一条）
     var uniq = [];
     var uid = {};
     for (var u = 0; u < ma.length; u++) {
-      var k = String(ma[u].animeId);
+      var k = _titleKey(ma[u].animeTitle);
       if (!uid[k]) { uid[k] = 1; uniq.push(ma[u]); }
     }
+    console.log(TAG, "fallback 去重后", uniq.length, "条");
     return { animes: uniq };
   } catch (e) {
     console.error(TAG, "searchDanmu 失败", e);
