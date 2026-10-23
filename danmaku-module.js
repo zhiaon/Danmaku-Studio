@@ -10,8 +10,9 @@
  * 设计原则：只做协议转换，不加工数据
  *   1) 三个环节全部实时请求，本地零缓存，每次播放都是最新数据；
  *   2) 剧集自动匹配走 match，电影无集号时走 search/anime；
- *   3) 分集列表原样返回，只按 seasonId 收窄多季番剧；
- *   4) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
+ *   3) 年份匹配（开关 yearMatch）：中文括号转英文，从 title/airDate/premiereDate 提取首集年份附加到文件名；
+ *   4) 分集列表原样返回，只按 seasonId 收窄多季番剧；
+ *   5) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
  *
  * 协议依据: InchStudio/ForwardWidgets
  */
@@ -19,7 +20,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.2.1",
+  version: "4.3.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -34,6 +35,13 @@ WidgetMetadata = {
       placeholders: [
         { title: "示例 danmu_api", value: "https://{domain}/{token}" }
       ]
+    },
+    {
+      name: "yearMatch",
+      title: "年份匹配",
+      type: "switch",
+      description: "合成文件名时附加首集年份（英文括号），提高多季番剧匹配精度。关闭后只传纯标题。",
+      defaultValue: true
     }
   ],
 
@@ -131,6 +139,20 @@ function _titleKey(title) {
   t = t.replace(/[《》]/g, "");
   t = t.replace(/[·・\s]/g, "");
   return t;
+}
+
+/** 从 params 提取首集年份：优先 title 里的括号年份，其次 airDate，最后 premiereDate */
+function _extractYear(params) {
+  var title = String((params && params.title) || "");
+  var m = title.match(/[（(](\d{4})[）)]/);
+  if (m) return m[1];
+  var ad = String((params && params.airDate) || "");
+  m = ad.match(/(\d{4})/);
+  if (m) return m[1];
+  var pd = String((params && params.premiereDate) || "");
+  m = pd.match(/(\d{4})/);
+  if (m) return m[1];
+  return "";
 }
 
 function _seasonHit(anime, season) {
@@ -244,13 +266,24 @@ async function _matchAnimeByName(params, title, season) {
   var sn = parseInt(season, 10);
   var hasEp = isFinite(ep) && ep > 0;
   var hasSn = isFinite(sn) && sn > 0;
+
+  // 年份匹配：中文括号转英文，提取首集年份附加到标题
+  var yearMatch = String(_cfg(params, "yearMatch", "true")).toLowerCase() !== "false";
+  var baseTitle = String(title || "").replace(/（/g, "(").replace(/）/g, ")");
+  if (yearMatch) {
+    var year = _extractYear(params);
+    if (year && baseTitle.indexOf("(" + year + ")") < 0) {
+      baseTitle = baseTitle + "(" + year + ")";
+    }
+  }
+
   var fileName;
   if (hasEp) {
     if (!hasSn) sn = 1;
-    fileName = title + ".S" + (sn < 10 ? "0" : "") + sn +
+    fileName = baseTitle + ".S" + (sn < 10 ? "0" : "") + sn +
                "E" + (ep < 10 ? "0" : "") + ep + ".mkv";
   } else {
-    fileName = title;                             // 电影/无季集：纯标题（带后缀必失配）
+    fileName = baseTitle;                         // 电影/无季集：纯标题（带后缀必失配）
   }
   try {
     var resp = await Widget.http.post(
