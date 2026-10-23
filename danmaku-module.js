@@ -261,8 +261,9 @@ async function searchDanmu(params) {
 }
 
 /**
- * 用「标题 + 季集」合成文件名调 /api/v2/match，命中返回原始 match 条目。
- * Forward 的 searchDanmu 拿不到真实文件名，只能合成；实测 "标题.S01E01.mkv" 命中率最高。
+ * 用「标题 + 季集」合成原始文件名调 /api/v2/match，命中返回原始 match 条目。
+ * Forward 的 searchDanmu 拿不到真实文件名，只能合成。
+ * 格式：标题(年份) S01E01（空格分隔，英文括号，无后缀）
  * 命中只用于给候选排位，最终集号仍由 getDetailById 的 episodes 决定。
  */
 async function _matchAnimeByName(params, title, season) {
@@ -283,10 +284,9 @@ async function _matchAnimeByName(params, title, season) {
   var fileName;
   if (hasEp) {
     if (!hasSn) sn = 1;
-    fileName = baseTitle + ".S" + (sn < 10 ? "0" : "") + sn +
-               "E" + (ep < 10 ? "0" : "") + ep + ".mkv";
+    fileName = baseTitle + " S" + (sn < 10 ? "0" : "") + sn + "E" + (ep < 10 ? "0" : "") + ep;
   } else {
-    fileName = baseTitle;                         // 电影/无季集：纯标题（带后缀必失配）
+    fileName = baseTitle;                          // 电影/无季集：纯标题
   }
   try {
     var resp = await Widget.http.post(
