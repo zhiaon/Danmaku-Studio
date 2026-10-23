@@ -20,7 +20,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.3.3",
+  version: "4.3.4-diag",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -205,6 +205,9 @@ async function searchDanmu(params) {
     var season = params.season !== undefined && params.season !== null
       ? String(params.season) : "";
     var keyword = params.title || "";
+
+    // [临时诊断] 打印 Forward 传入的参数，确认是否带 airDate/premiereDate
+    console.log(TAG, "入参:", JSON.stringify(params));
 
     if (!keyword) {
       console.log(TAG, "搜索关键词为空，返回空列表");
