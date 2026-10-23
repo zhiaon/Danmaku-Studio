@@ -1,28 +1,6 @@
 /**
- * 江砚弹幕模块（DandanPlay v2 兼容协议）
+ * 江砚弹幕模块
  *
- * 数据源: 由「弹幕服务器」参数指定（DandanPlay v2 兼容协议，如 danmu_api 自部署实例）
- *   POST /api/v2/match   {fileName:"..."}    自动匹配（剧集：标题+季集合成文件名）
- *   GET  /api/v2/search/anime?keyword=<kw>   电影兜底（无集号时用）
- *   GET  /api/v2/bangumi/:animeId            分集列表
- *   GET  /api/v2/comment/:commentId          整集弹幕
- *
- * 设计原则：只做协议转换，不加工数据
- *   1) 三个环节全部实时请求，本地零缓存，每次播放都是最新数据；
- *   2) 剧集自动匹配走 match，电影无集号时走 search/anime；
- *   3) 分集列表原样返回，只按 seasonId 收窄多季番剧；
- *   4) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
- *
- * 版本记录
- *   3.3.5  删除已停用的一整套旧引擎（多源合并/打分/集号解析/文件名匹配/分段），约 1400 行。
- *   3.3.4  searchDanmu 并发调用 /api/v2/match，命中的番剧置顶（search 仍作候选来源与兜底）。
- *   3.3.3  searchDanmu 排序完全对齐 danmu_api（季数匹配优先 + 原序）。
- *   3.3.2  移除全部本地缓存，模块不再读写 Widget.storage。
- *   3.3.1  分集列表改为实时请求，剧集更新后新集立即出现。
- *   3.2.1  getCommentsById 与 danmu_api 完全一致：1 次请求、原样返回、无兜底。
- *
- * 协议依据: InchStudio/ForwardWidgets
- */
 
 // ============================ 元数据 ============================
 
