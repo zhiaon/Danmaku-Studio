@@ -19,7 +19,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.1.2",
+  version: "4.1.3",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -203,7 +203,8 @@ async function searchDanmu(params) {
         typeDescription: m.typeDescription,
         imageUrl: m.imageUrl,
         url: m.url,
-        episodeCount: 0
+        episodeCount: 0,
+        commentId: m.episodeId                   // match 返回的 episodeId，Forward 拿到可直接调 comment，跳过 getDetail
       });
     }
     console.log(TAG, "匹配", keyword, "命中", animes.length, "部（match 直连）");
