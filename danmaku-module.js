@@ -1,8 +1,20 @@
 /**
- * 江砚弹幕模块
+ * 江砚弹幕模块（DandanPlay v2 兼容协议）
  *
-
-// ============================ 元数据 ============================
+ * 数据源: 由「弹幕服务器」参数指定（DandanPlay v2 兼容协议，如 danmu_api 自部署实例）
+ *   POST /api/v2/match   {fileName:"..."}    自动匹配（剧集：标题+季集合成文件名）
+ *   GET  /api/v2/search/anime?keyword=<kw>   电影兜底（无集号时用）
+ *   GET  /api/v2/bangumi/:animeId            分集列表
+ *   GET  /api/v2/comment/:commentId          整集弹幕
+ *
+ * 设计原则：只做协议转换，不加工数据
+ *   1) 三个环节全部实时请求，本地零缓存，每次播放都是最新数据；
+ *   2) 剧集自动匹配走 match，电影无集号时走 search/anime；
+ *   3) 分集列表原样返回，只按 seasonId 收窄多季番剧；
+ *   4) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
+ *
+ * 协议依据: InchStudio/ForwardWidgets
+ */
 
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
