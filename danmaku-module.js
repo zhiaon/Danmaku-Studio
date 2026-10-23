@@ -19,7 +19,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.0.3",
+  version: "4.0.4",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -173,11 +173,15 @@ async function searchDanmu(params) {
       return { animes: [] };
     }
 
-    // 剧集：只走 /api/v2/match，用「标题.S01E01.mkv」合成文件名拿精确命中。
-    // 电影：没有集号，match 无从比对，走 search/anime 拿候选。
+    // 剧集走 /api/v2/match（带季集，缺集号时用第1集探路）；
+    // 电影/剧场版没有季集概念，走 search/anime 拿候选。
     var epNum = parseInt(params.episode, 10);
-    if (!isFinite(epNum) || epNum <= 0) {
-      console.log(TAG, "无集数（电影/单集），走 search/anime", keyword);
+    var typeStr = String(params.type || "").toLowerCase();
+    var hasSeason = params.season !== undefined && params.season !== null && String(params.season) !== "";
+    var isMovie = typeStr === "movie" ||
+                  (typeStr !== "tv" && !hasSeason && (!isFinite(epNum) || epNum <= 0));
+    if (isMovie) {
+      console.log(TAG, "无季集（电影/剧场版），走 search/anime", keyword);
       var mv = _unwrap(
         await Widget.http.get(server + "/api/v2/search/anime?keyword=" + encodeURIComponent(keyword), { headers: _headers(params) }),
         "搜索电影"
@@ -222,7 +226,7 @@ async function searchDanmu(params) {
  */
 async function _matchAnimeByName(params, title, season) {
   var ep = parseInt(params && params.episode, 10);
-  if (!isFinite(ep) || ep <= 0) return [];        // 没有集数，match 无从比对
+  if (!isFinite(ep) || ep <= 0) ep = 1;           // 搜索阶段没有集号，用第1集探路
   var sn = parseInt(season, 10);
   if (!isFinite(sn) || sn <= 0) sn = 1;
   var fileName = title + ".S" + (sn < 10 ? "0" : "") + sn +
