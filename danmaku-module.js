@@ -10,7 +10,7 @@
  * 设计原则：只做协议转换，不加工数据
  *   1) 三个环节全部实时请求，本地零缓存，每次播放都是最新数据；
  *   2) 剧集自动匹配走 match，电影无集号时走 search/anime；
- *   3) 年份匹配（开关 yearMatch）：中文括号转英文，从 title/airDate/premiereDate 提取首集年份附加到文件名；
+ *   3) 年份匹配（开关 yearMatch）：开启时若 params 无年份，先 search/anime 反查再拼文件名，并按年份筛选结果；关闭时直接用纯标题；
  *   4) 分集列表原样返回，只按 seasonId 收窄多季番剧；
  *   5) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
  *
@@ -20,7 +20,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.3.6",
+  version: "4.3.7",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -303,11 +303,14 @@ async function _matchAnimeByName(params, title, season) {
   var hasEp = isFinite(ep) && ep > 0;
   var hasSn = isFinite(sn) && sn > 0;
 
+  // 年份匹配开关：同时控制「反查年份」与「结果按年份筛选」
+  var yearMatch = String(_cfg(params, "yearMatch", "on")).toLowerCase() !== "off";
+
   // 标题规范化（默认行为）：中文括号转英文
   var baseTitle = String(title || "").replace(/（/g, "(").replace(/）/g, ")");
   var year = _extractYear(params);
-  // params 不带年份 → 先 search/anime 反查一次（代价：多一次请求）
-  if (!year) {
+  // 开关开启且 params 不带年份 → 先 search/anime 反查一次（代价：多一次请求）
+  if (yearMatch && !year) {
     try {
       var sr = await Widget.http.get(
         _server(params) + "/api/v2/search/anime?keyword=" + encodeURIComponent(title),
@@ -324,8 +327,6 @@ async function _matchAnimeByName(params, title, season) {
   if (year && baseTitle.indexOf("(" + year + ")") < 0) {
     baseTitle = baseTitle + "(" + year + ")";
   }
-  // 年份匹配（独立开关）：命中结果按年份再筛一遍
-  var yearMatch = String(_cfg(params, "yearMatch", "on")).toLowerCase() !== "off";
 
   var fileName;
   if (hasEp) {
