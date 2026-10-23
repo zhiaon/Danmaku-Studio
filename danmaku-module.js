@@ -19,7 +19,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.0.8",
+  version: "4.0.9",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -206,7 +206,14 @@ async function searchDanmu(params) {
     if (!mv || mv.success === false) return { animes: [] };
     var ma = Array.isArray(mv.animes) ? mv.animes : [];
     console.log(TAG, "fallback search", keyword, "命中", ma.length, "条");
-    return { animes: ma };
+    // 按 animeId 去重（同片多平台来源只保留一条）
+    var uniq = [];
+    var uid = {};
+    for (var u = 0; u < ma.length; u++) {
+      var k = String(ma[u].animeId);
+      if (!uid[k]) { uid[k] = 1; uniq.push(ma[u]); }
+    }
+    return { animes: uniq };
   } catch (e) {
     console.error(TAG, "searchDanmu 失败", e);
     throw e;
