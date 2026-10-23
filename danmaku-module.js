@@ -29,7 +29,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.0.2",
+  version: "4.0.3",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -320,14 +320,7 @@ async function getDetailById(params) {
     for (var k = 0; k < eps.length; k++) {
       var e = eps[k];
       if (!e || e.episodeId === undefined || e.episodeId === null) continue;
-      out.push({
-        seasonId: e.seasonId,
-        episodeId: String(e.episodeId),
-        episodeTitle: String(e.episodeTitle || ""),
-        episodeNumber: e.episodeNumber,
-        airDate: e.airDate,
-        url: e.url
-      });
+      out.push(e);
     }
 
     return out;
