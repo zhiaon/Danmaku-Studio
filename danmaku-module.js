@@ -20,7 +20,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.3.0",
+  version: "4.3.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -39,9 +39,13 @@ WidgetMetadata = {
     {
       name: "yearMatch",
       title: "年份匹配",
-      type: "switch",
-      description: "合成文件名时附加首集年份（英文括号），提高多季番剧匹配精度。关闭后只传纯标题。",
-      defaultValue: true
+      type: "enumeration",
+      description: "合成文件名时附加首集年份（英文括号），提高多季番剧匹配精度",
+      value: "on",
+      enumOptions: [
+        { title: "开启", value: "on" },
+        { title: "关闭", value: "off" }
+      ]
     }
   ],
 
@@ -268,7 +272,7 @@ async function _matchAnimeByName(params, title, season) {
   var hasSn = isFinite(sn) && sn > 0;
 
   // 年份匹配：中文括号转英文，提取首集年份附加到标题
-  var yearMatch = String(_cfg(params, "yearMatch", "true")).toLowerCase() !== "false";
+  var yearMatch = String(_cfg(params, "yearMatch", "on")).toLowerCase() !== "off";
   var baseTitle = String(title || "").replace(/（/g, "(").replace(/）/g, ")");
   if (yearMatch) {
     var year = _extractYear(params);
