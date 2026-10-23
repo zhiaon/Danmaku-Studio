@@ -3,12 +3,13 @@
  *
  * 数据源: 由「弹幕服务器」参数指定（DandanPlay v2 兼容协议，如 danmu_api 自部署实例）
  *   POST /api/v2/match   {fileName:"..."}    自动匹配（剧集：标题+季集合成文件名）
+ *   GET  /api/v2/search/anime?keyword=<kw>   电影兜底（无集号时用）
  *   GET  /api/v2/bangumi/:animeId            分集列表
  *   GET  /api/v2/comment/:commentId          整集弹幕
  *
  * 设计原则：只做协议转换，不加工数据
  *   1) 三个环节全部实时请求，本地零缓存，每次播放都是最新数据；
- *   2) 自动匹配只走 match，电影/剧场版无季集直接返回空；
+ *   2) 剧集自动匹配走 match，电影无集号时走 search/anime；
  *   3) 分集列表原样返回，只按 seasonId 收窄多季番剧；
  *   4) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
  *
@@ -18,7 +19,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.0.5",
+  version: "4.0.4",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -172,16 +173,23 @@ async function searchDanmu(params) {
       return { animes: [] };
     }
 
-    // 剧集走 /api/v2/match（带季集，缺集号时用第1集探路）。
-    // 电影/剧场版没有季集，match 无年份必失配，直接返回空（已移除 search/anime）。
+    // 剧集走 /api/v2/match（带季集，缺集号时用第1集探路）；
+    // 电影/剧场版没有季集概念，走 search/anime 拿候选。
     var epNum = parseInt(params.episode, 10);
     var typeStr = String(params.type || "").toLowerCase();
     var hasSeason = params.season !== undefined && params.season !== null && String(params.season) !== "";
     var isMovie = typeStr === "movie" ||
                   (typeStr !== "tv" && !hasSeason && (!isFinite(epNum) || epNum <= 0));
     if (isMovie) {
-      console.log(TAG, "电影/剧场版无季集，无法匹配，返回空列表", keyword);
-      return { animes: [] };
+      console.log(TAG, "无季集（电影/剧场版），走 search/anime", keyword);
+      var mv = _unwrap(
+        await Widget.http.get(server + "/api/v2/search/anime?keyword=" + encodeURIComponent(keyword), { headers: _headers(params) }),
+        "搜索电影"
+      );
+      if (!mv || mv.success === false) return { animes: [] };
+      var ma = Array.isArray(mv.animes) ? mv.animes : [];
+      console.log(TAG, "搜索", keyword, "命中", ma.length, "条（电影）");
+      return { animes: ma };
     }
 
     var hits = await _matchAnimeByName(params, keyword, season);
