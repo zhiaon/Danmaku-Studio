@@ -20,7 +20,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.3.4-diag",
+  version: "4.3.5",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -224,9 +224,7 @@ async function searchDanmu(params) {
       seen[key] = 1;
       animes.push({
         animeId: m.animeId,                       // 保持服务端原类型（number），Forward 做严格比较
-        animeTitle: m.animeTitle + " [诊断 aD:" + String(params.airDate || "-") +
-                   " pD:" + String(params.premiereDate || "-") +
-                   " t:" + String(params.title || "-") + "]",
+        animeTitle: m.animeTitle,
         type: m.type,
         typeDescription: m.typeDescription,
         imageUrl: m.imageUrl,
