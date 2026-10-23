@@ -19,7 +19,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.0.6",
+  version: "4.0.7",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -168,30 +168,16 @@ async function searchDanmu(params) {
       ? String(params.season) : "";
     var keyword = params.title || "";
 
+    // 诊断日志：确认 Forward 传了哪些字段（type / season / episode / airDate 等）
+    console.log(TAG, "searchDanmu 入参:", JSON.stringify(params));
+
     if (!keyword) {
       console.log(TAG, "搜索关键词为空，返回空列表");
       return { animes: [] };
     }
 
-    // 剧集走 /api/v2/match（带季集，缺集号时用第1集探路）；
-    // 电影/剧场版没有季集概念，走 search/anime 拿候选。
-    var epNum = parseInt(params.episode, 10);
-    var typeStr = String(params.type || "").toLowerCase();
-    var hasSeason = params.season !== undefined && params.season !== null && String(params.season) !== "";
-    var isMovie = typeStr === "movie" ||
-                  (typeStr !== "tv" && !hasSeason && (!isFinite(epNum) || epNum <= 0));
-    if (isMovie) {
-      console.log(TAG, "无季集（电影/剧场版），走 search/anime", keyword);
-      var mv = _unwrap(
-        await Widget.http.get(server + "/api/v2/search/anime?keyword=" + encodeURIComponent(keyword), { headers: _headers(params) }),
-        "搜索电影"
-      );
-      if (!mv || mv.success === false) return { animes: [] };
-      var ma = Array.isArray(mv.animes) ? mv.animes : [];
-      console.log(TAG, "搜索", keyword, "命中", ma.length, "条（电影）");
-      return { animes: ma };
-    }
-
+    // 所有类型先走 match（剧集带季集，电影用纯标题）；
+    // match 未命中时 fallback 到 search/anime。
     var hits = await _matchAnimeByName(params, keyword, season);
     var animes = [];
     var seen = {};
@@ -212,7 +198,18 @@ async function searchDanmu(params) {
       });
     }
     console.log(TAG, "匹配", keyword, "命中", animes.length, "部（match 直连）");
-    return { animes: animes };
+    if (animes.length) return { animes: animes };
+
+    // match 未命中 → fallback search/anime
+    console.log(TAG, "match 未命中，fallback search/anime", keyword);
+    var mv = _unwrap(
+      await Widget.http.get(server + "/api/v2/search/anime?keyword=" + encodeURIComponent(keyword), { headers: _headers(params) }),
+      "搜索候选"
+    );
+    if (!mv || mv.success === false) return { animes: [] };
+    var ma = Array.isArray(mv.animes) ? mv.animes : [];
+    console.log(TAG, "fallback search", keyword, "命中", ma.length, "条");
+    return { animes: ma };
   } catch (e) {
     console.error(TAG, "searchDanmu 失败", e);
     throw e;
@@ -226,11 +223,17 @@ async function searchDanmu(params) {
  */
 async function _matchAnimeByName(params, title, season) {
   var ep = parseInt(params && params.episode, 10);
-  if (!isFinite(ep) || ep <= 0) ep = 1;           // 搜索阶段没有集号，用第1集探路
   var sn = parseInt(season, 10);
-  if (!isFinite(sn) || sn <= 0) sn = 1;
-  var fileName = title + ".S" + (sn < 10 ? "0" : "") + sn +
-                 "E" + (ep < 10 ? "0" : "") + ep + ".mkv";
+  var hasEp = isFinite(ep) && ep > 0;
+  var hasSn = isFinite(sn) && sn > 0;
+  var fileName;
+  if (hasEp) {
+    if (!hasSn) sn = 1;
+    fileName = title + ".S" + (sn < 10 ? "0" : "") + sn +
+               "E" + (ep < 10 ? "0" : "") + ep + ".mkv";
+  } else {
+    fileName = title + ".mkv";                    // 电影/无季集：纯标题
+  }
   try {
     var resp = await Widget.http.post(
       _server(params) + "/api/v2/match",
