@@ -20,7 +20,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.3.5",
+  version: "4.3.6",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -159,6 +159,37 @@ function _extractYear(params) {
   return "";
 }
 
+/** 从 animeTitle 里提取年份：「凡人修仙传(2020)【动漫】」→ 2020 */
+function _titleYear(title) {
+  var m = String(title || "").match(/[（(](\d{4})[）)]/);
+  return m ? m[1] : "";
+}
+
+/** 从 search/anime 候选里挑与原始标题最接近的那条的年份 */
+function _pickYearFromCandidates(title, animes) {
+  var norm = function (s) {
+    return String(s || "")
+      .replace(/\s*from\s+.*$/i, "")
+      .replace(/【[^】]*】/g, "")
+      .replace(/[（(]\d{4}[）)]/g, "")
+      .replace(/[（]/g, "(").replace(/[）]/g, ")")
+      .replace(/[()《》·・\s]/g, "");
+  };
+  var want = norm(title);
+  var best = null;
+  var bestLen = 1e9;
+  for (var i = 0; i < animes.length; i++) {
+    var at = String(animes[i].animeTitle || "");
+    var y = _titleYear(at);
+    if (!y) continue;
+    var n = norm(at);
+    if (n === want) return y;                       // 同名优先
+    var d = Math.abs(n.length - want.length);       // 否则取长度差最小的
+    if (d < bestLen) { bestLen = d; best = y; }
+  }
+  return best || "";
+}
+
 function _seasonHit(anime, season) {
   if (!season) return false;
   var s = String(season).trim();
@@ -272,9 +303,24 @@ async function _matchAnimeByName(params, title, season) {
   var hasEp = isFinite(ep) && ep > 0;
   var hasSn = isFinite(sn) && sn > 0;
 
-  // 标题规范化（默认行为）：中文括号转英文，提取年份附加到标题
+  // 标题规范化（默认行为）：中文括号转英文
   var baseTitle = String(title || "").replace(/（/g, "(").replace(/）/g, ")");
   var year = _extractYear(params);
+  // params 不带年份 → 先 search/anime 反查一次（代价：多一次请求）
+  if (!year) {
+    try {
+      var sr = await Widget.http.get(
+        _server(params) + "/api/v2/search/anime?keyword=" + encodeURIComponent(title),
+        { headers: _headers(params) }
+      );
+      var sd = _unwrap(sr, "反查年份");
+      var sa = sd && Array.isArray(sd.animes) ? sd.animes : [];
+      year = _pickYearFromCandidates(title, sa);
+      console.log(TAG, "反查年份", title, "→", year || "(未取到)");
+    } catch (e) {
+      console.error(TAG, "反查年份失败，按不带年份处理", e.message);
+    }
+  }
   if (year && baseTitle.indexOf("(" + year + ")") < 0) {
     baseTitle = baseTitle + "(" + year + ")";
   }
