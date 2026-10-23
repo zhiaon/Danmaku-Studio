@@ -20,7 +20,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.3.1",
+  version: "4.3.2",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -40,7 +40,7 @@ WidgetMetadata = {
       name: "yearMatch",
       title: "年份匹配",
       type: "enumeration",
-      description: "合成文件名时附加首集年份（英文括号），提高多季番剧匹配精度",
+      description: "从匹配结果中筛选年份一致的条目（多季番剧按当前季首集年份），提高选中精度",
       value: "on",
       enumOptions: [
         { title: "开启", value: "on" },
@@ -271,15 +271,14 @@ async function _matchAnimeByName(params, title, season) {
   var hasEp = isFinite(ep) && ep > 0;
   var hasSn = isFinite(sn) && sn > 0;
 
-  // 年份匹配：中文括号转英文，提取首集年份附加到标题
-  var yearMatch = String(_cfg(params, "yearMatch", "on")).toLowerCase() !== "off";
+  // 标题规范化（默认行为）：中文括号转英文，提取年份附加到标题
   var baseTitle = String(title || "").replace(/（/g, "(").replace(/）/g, ")");
-  if (yearMatch) {
-    var year = _extractYear(params);
-    if (year && baseTitle.indexOf("(" + year + ")") < 0) {
-      baseTitle = baseTitle + "(" + year + ")";
-    }
+  var year = _extractYear(params);
+  if (year && baseTitle.indexOf("(" + year + ")") < 0) {
+    baseTitle = baseTitle + "(" + year + ")";
   }
+  // 年份匹配（独立开关）：命中结果按年份再筛一遍
+  var yearMatch = String(_cfg(params, "yearMatch", "on")).toLowerCase() !== "off";
 
   var fileName;
   if (hasEp) {
@@ -300,6 +299,14 @@ async function _matchAnimeByName(params, title, season) {
     if (!data || !data.isMatched || !list.length) {
       console.log(TAG, "匹配", fileName, "→ 未命中");
       return [];
+    }
+    // 年份匹配：多结果时优先保留标题含该年份的条目
+    if (yearMatch && year && list.length > 1) {
+      var picked = [];
+      for (var yi = 0; yi < list.length; yi++) {
+        if (String(list[yi].animeTitle || "").indexOf(year) >= 0) picked.push(list[yi]);
+      }
+      if (picked.length) list = picked;
     }
     for (var i = 0; i < list.length; i++) {
       console.log(TAG, "匹配", fileName, "→", list[i].animeId,
