@@ -2,14 +2,15 @@
  * 江砚弹幕模块（DandanPlay v2 兼容协议）
  *
  * 数据源: 由「弹幕服务器」参数指定（DandanPlay v2 兼容协议，如 danmu_api 自部署实例）
- *   POST /api/v2/match   {fileName:"..."}    自动匹配（剧集：标题+季集合成文件名；电影：纯标题）
- *   GET  /api/v2/search/anime?keyword=<kw>   电影兜底（match 未命中时）
+ *   POST /api/v2/match   {fileName:"..."}    自动匹配（剧集：标题+季集合成文件名）
+ *   GET  /api/v2/search/anime?keyword=<kw>   电影兜底（无集号时用）
+ *   GET  /api/v2/bangumi/:animeId            分集列表
  *   GET  /api/v2/comment/:commentId          整集弹幕
  *
  * 设计原则：只做协议转换，不加工数据
  *   1) 三个环节全部实时请求，本地零缓存，每次播放都是最新数据；
  *   2) 剧集自动匹配走 match，电影无集号时走 search/anime；
- *   3) commentId 来自 match 返回的 episodeId，Forward 可直接调 comment；
+ *   3) 分集列表原样返回，只按 seasonId 收窄多季番剧；
  *   4) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
  *
  * 协议依据: InchStudio/ForwardWidgets
@@ -18,7 +19,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.2.0",
+  version: "4.1.3",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -42,6 +43,14 @@ WidgetMetadata = {
       id: "searchDanmu",
       title: "搜索弹幕",
       functionName: "searchDanmu",
+      type: "danmu",
+      params: []
+    },
+    {
+      // id 固定，返回番剧分集列表，供客户端匹配季集
+      id: "getDetail",
+      title: "获取分集",
+      functionName: "getDetailById",
       type: "danmu",
       params: []
     },
@@ -94,6 +103,10 @@ function _headers(params) {
   };
 }
 
+function _now() {
+  return Math.floor(Date.now() / 1000);
+}
+
 /** 统一 HTTP 错误抛出，保留状态码便于在 App 测试工具里定位 */
 function _unwrap(resp, what) {
   if (!resp) throw new Error(what + ": 无响应");
@@ -118,6 +131,26 @@ function _titleKey(title) {
   t = t.replace(/[《》]/g, "");
   t = t.replace(/[·・\s]/g, "");
   return t;
+}
+
+function _seasonHit(anime, season) {
+  if (!season) return false;
+  var s = String(season).trim();
+  if (!s) return false;
+  var hay = String(anime.animeTitle || "") + " " + _aliases(anime);
+  var num = parseInt(s, 10);
+  var cands = [s];
+  if (isFinite(num) && num > 0) cands.push(String(_toChinese(num)));
+  for (var i = 0; i < cands.length; i++) {
+    var c = cands[i];
+    var patterns = ["第" + c + "季", "第" + c + "部", "第" + c + "期",
+                    c + "季", c + "部",
+                    "season " + c, "season" + c, "s" + c];
+    for (var j = 0; j < patterns.length; j++) {
+      if (hay.toLowerCase().indexOf(patterns[j].toLowerCase()) >= 0) return true;
+    }
+  }
+  return false;
 }
 
 function _aliases(anime) {
@@ -171,7 +204,7 @@ async function searchDanmu(params) {
         imageUrl: m.imageUrl,
         url: m.url,
         episodeCount: 0,
-        commentId: m.episodeId                   // match 返回的 episodeId 作为 commentId，Forward 直接调 comment
+        commentId: m.episodeId                   // match 返回的 episodeId，Forward 拿到可直接调 comment，跳过 getDetail
       });
     }
     console.log(TAG, "匹配", keyword, "命中", animes.length, "部（match 直连）");
@@ -204,7 +237,7 @@ async function searchDanmu(params) {
 /**
  * 用「标题 + 季集」合成文件名调 /api/v2/match，命中返回原始 match 条目。
  * Forward 的 searchDanmu 拿不到真实文件名，只能合成；实测 "标题.S01E01.mkv" 命中率最高。
- * 命中返回的 episodeId 作为 commentId 传给 Forward，Forward 直接调 comment 拿弹幕。
+ * 命中只用于给候选排位，最终集号仍由 getDetailById 的 episodes 决定。
  */
 async function _matchAnimeByName(params, title, season) {
   var ep = parseInt(params && params.episode, 10);
@@ -244,7 +277,75 @@ async function _matchAnimeByName(params, title, season) {
 
 
 
-// ============================ 2. 整集弹幕加载 ============================
+// ============================ 2. 获取分集 ============================
+
+/**
+ * 获取分集：/api/v2/bangumi/:animeId → bangumi.episodes
+ * 返回原样 episode 字段（seasonId/episodeId/episodeTitle/episodeNumber/airDate/url），
+ * 客户端靠 episodeNumber + seasonId 对齐 TMDB 的季集。
+ */
+async function getDetailById(params) {
+  try {
+    var server = _server(params);
+    var animeId = params.animeId;
+    if (!animeId) throw new Error("缺少 animeId");
+
+    // 分集列表必须实时：剧集在持续更新（嫁金钗从 12 集涨到 14 集），
+    // 一旦缓存，新集就不会出现在 Forward 的分集面板里，导致新集无弹幕。
+    var data = _unwrap(
+      await Widget.http.get(server + "/api/v2/bangumi/" + encodeURIComponent(animeId), { headers: _headers(params) }),
+      "获取分集"
+    );
+    var bangumi = data && data.bangumi;
+    if (!bangumi) {
+      if (data && data.success === false) throw new Error("获取分集失败: " + (data.errorMessage || ""));
+      return [];
+    }
+    var rec = {
+      t: _now(),
+      animeId: String(animeId),
+      animeTitle: String(bangumi.animeTitle || ""),
+      seasons: bangumi.seasons || [],
+      episodes: Array.isArray(bangumi.episodes) ? bangumi.episodes : []
+    };
+    console.log(TAG, "番剧", animeId, "共", rec.episodes.length, "集（实时）");
+
+    // 多季合并的番剧：按 seasonId 收窄，客户端就不用猜哪集是第几季
+    var eps = rec.episodes;
+    var season = params.season !== undefined && params.season !== null ? String(params.season) : "";
+    if (season && Array.isArray(rec.seasons) && rec.seasons.length > 1) {
+      var idx = parseInt(season, 10) - 1;
+      var target = null;
+      if (isFinite(idx) && idx >= 0 && idx < rec.seasons.length) target = rec.seasons[idx];
+      if (!target) {
+        for (var i = 0; i < rec.seasons.length; i++) {
+          if (_seasonHit(rec.seasons[i], season)) { target = rec.seasons[i]; break; }
+        }
+      }
+      if (target && target.id) {
+        var subset = [];
+        for (var j = 0; j < eps.length; j++) {
+          if (eps[j].seasonId === target.id) subset.push(eps[j]);
+        }
+        if (subset.length) eps = subset;
+      }
+    }
+
+    var out = [];
+    for (var k = 0; k < eps.length; k++) {
+      var e = eps[k];
+      if (!e || e.episodeId === undefined || e.episodeId === null) continue;
+      out.push(e);
+    }
+
+    return out;
+  } catch (e) {
+    console.error(TAG, "getDetailById 失败", e);
+    throw e;
+  }
+}
+
+// ============================ 3. 整集弹幕加载 ============================
 
 /**
  * 解析 commentId：优先客户端给的，其次用 match 接口按文件名反查。
