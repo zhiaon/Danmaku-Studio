@@ -206,9 +206,6 @@ async function searchDanmu(params) {
       ? String(params.season) : "";
     var keyword = params.title || "";
 
-    // [临时诊断] 打印 Forward 传入的参数，确认是否带 airDate/premiereDate
-    console.log(TAG, "入参:", JSON.stringify(params));
-
     if (!keyword) {
       console.log(TAG, "搜索关键词为空，返回空列表");
       return { animes: [] };
@@ -227,7 +224,9 @@ async function searchDanmu(params) {
       seen[key] = 1;
       animes.push({
         animeId: m.animeId,                       // 保持服务端原类型（number），Forward 做严格比较
-        animeTitle: m.animeTitle,
+        animeTitle: m.animeTitle + " [诊断 aD:" + String(params.airDate || "-") +
+                   " pD:" + String(params.premiereDate || "-") +
+                   " t:" + String(params.title || "-") + "]",
         type: m.type,
         typeDescription: m.typeDescription,
         imageUrl: m.imageUrl,
