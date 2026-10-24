@@ -10,8 +10,9 @@
  * 设计原则：只做协议转换，不加工数据
  *   1) 三个环节全部实时请求，本地零缓存，每次播放都是最新数据；
  *   2) 剧集自动匹配走 match，电影无集号时走 search/anime；
- *   3) 分集列表原样返回，只按 seasonId 收窄多季番剧；
- *   4) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
+ *   3) 年份匹配（开关 yearMatch）：开启时若标题自带(年份)则拼入文件名辅助匹配；不额外发请求，不影响播放速度；
+ *   4) 分集列表原样返回，只按 seasonId 收窄多季番剧；
+ *   5) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
  *
  * 协议依据: InchStudio/ForwardWidgets
  */
@@ -19,7 +20,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.4.0",
+  version: "4.5.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -33,6 +34,17 @@ WidgetMetadata = {
       description: "DandanPlay v2 弹幕服务接口，兼容 danmu_api 协议，填写时请勿在末尾添加 /",
       placeholders: [
         { title: "示例 danmu_api", value: "https://{domain}/{token}" }
+      ]
+    },
+    {
+      name: "yearMatch",
+      title: "年份匹配",
+      type: "enumeration",
+      description: "开启后，若标题自带(年份)则拼入文件名辅助匹配；不额外发请求，不影响播放速度",
+      value: "on",
+      enumOptions: [
+        { title: "开启", value: "on" },
+        { title: "关闭", value: "off" }
       ]
     }
   ],
@@ -131,6 +143,20 @@ function _titleKey(title) {
   t = t.replace(/[《》]/g, "");
   t = t.replace(/[·・\s]/g, "");
   return t;
+}
+
+/** 从 params 提取年份：优先 title 里的括号年份，其次 airDate，最后 premiereDate */
+function _extractYear(params) {
+  var title = String((params && params.title) || "");
+  var m = title.match(/[（(](\d{4})[）)]/);
+  if (m) return m[1];
+  var ad = String((params && params.airDate) || "");
+  m = ad.match(/(\d{4})/);
+  if (m) return m[1];
+  var pd = String((params && params.premiereDate) || "");
+  m = pd.match(/(\d{4})/);
+  if (m) return m[1];
+  return "";
 }
 
 function _seasonHit(anime, season) {
@@ -246,8 +272,17 @@ async function _matchAnimeByName(params, title, season) {
   var hasEp = isFinite(ep) && ep > 0;
   var hasSn = isFinite(sn) && sn > 0;
 
+  // 年份匹配开关：只控制「标题自带年份时是否拼入文件名 + 多结果按年份筛选」
+  var yearMatch = String(_cfg(params, "yearMatch", "on")).toLowerCase() !== "off";
+
   // 标题规范化：中文括号转英文
   var baseTitle = String(title || "").replace(/（/g, "(").replace(/）/g, ")");
+
+  // 标题自带(年份)时才拼入（不额外发请求反查）
+  var year = yearMatch ? _extractYear(params) : "";
+  if (year && baseTitle.indexOf("(" + year + ")") < 0) {
+    baseTitle = baseTitle + "(" + year + ")";
+  }
 
   var fileName;
   if (hasEp) {
@@ -267,6 +302,14 @@ async function _matchAnimeByName(params, title, season) {
     if (!data || !data.isMatched || !list.length) {
       console.log(TAG, "匹配", fileName, "→ 未命中");
       return [];
+    }
+    // 年份匹配：多结果时优先保留标题含该年份的条目
+    if (yearMatch && year && list.length > 1) {
+      var picked = [];
+      for (var yi = 0; yi < list.length; yi++) {
+        if (String(list[yi].animeTitle || "").indexOf(year) >= 0) picked.push(list[yi]);
+      }
+      if (picked.length) list = picked;
     }
     for (var i = 0; i < list.length; i++) {
       console.log(TAG, "匹配", fileName, "→", list[i].animeId,
