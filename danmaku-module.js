@@ -10,9 +10,8 @@
  * 设计原则：只做协议转换，不加工数据
  *   1) 三个环节全部实时请求，本地零缓存，每次播放都是最新数据；
  *   2) 剧集自动匹配走 match，电影无集号时走 search/anime；
- *   3) 年份匹配（开关 yearMatch）：开启时若 params 无年份，先 search/anime 反查再拼文件名，并按年份筛选结果；关闭时直接用纯标题；
- *   4) 分集列表原样返回，只按 seasonId 收窄多季番剧；
- *   5) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
+ *   3) 分集列表原样返回，只按 seasonId 收窄多季番剧；
+ *   4) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
  *
  * 协议依据: InchStudio/ForwardWidgets
  */
@@ -20,7 +19,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.3.7",
+  version: "4.4.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -34,17 +33,6 @@ WidgetMetadata = {
       description: "DandanPlay v2 弹幕服务接口，兼容 danmu_api 协议，填写时请勿在末尾添加 /",
       placeholders: [
         { title: "示例 danmu_api", value: "https://{domain}/{token}" }
-      ]
-    },
-    {
-      name: "yearMatch",
-      title: "年份匹配",
-      type: "enumeration",
-      description: "从匹配结果中筛选年份一致的条目（多季番剧按当前季首集年份），提高选中精度",
-      value: "on",
-      enumOptions: [
-        { title: "开启", value: "on" },
-        { title: "关闭", value: "off" }
       ]
     }
   ],
@@ -143,51 +131,6 @@ function _titleKey(title) {
   t = t.replace(/[《》]/g, "");
   t = t.replace(/[·・\s]/g, "");
   return t;
-}
-
-/** 从 params 提取首集年份：优先 title 里的括号年份，其次 airDate，最后 premiereDate */
-function _extractYear(params) {
-  var title = String((params && params.title) || "");
-  var m = title.match(/[（(](\d{4})[）)]/);
-  if (m) return m[1];
-  var ad = String((params && params.airDate) || "");
-  m = ad.match(/(\d{4})/);
-  if (m) return m[1];
-  var pd = String((params && params.premiereDate) || "");
-  m = pd.match(/(\d{4})/);
-  if (m) return m[1];
-  return "";
-}
-
-/** 从 animeTitle 里提取年份：「凡人修仙传(2020)【动漫】」→ 2020 */
-function _titleYear(title) {
-  var m = String(title || "").match(/[（(](\d{4})[）)]/);
-  return m ? m[1] : "";
-}
-
-/** 从 search/anime 候选里挑与原始标题最接近的那条的年份 */
-function _pickYearFromCandidates(title, animes) {
-  var norm = function (s) {
-    return String(s || "")
-      .replace(/\s*from\s+.*$/i, "")
-      .replace(/【[^】]*】/g, "")
-      .replace(/[（(]\d{4}[）)]/g, "")
-      .replace(/[（]/g, "(").replace(/[）]/g, ")")
-      .replace(/[()《》·・\s]/g, "");
-  };
-  var want = norm(title);
-  var best = null;
-  var bestLen = 1e9;
-  for (var i = 0; i < animes.length; i++) {
-    var at = String(animes[i].animeTitle || "");
-    var y = _titleYear(at);
-    if (!y) continue;
-    var n = norm(at);
-    if (n === want) return y;                       // 同名优先
-    var d = Math.abs(n.length - want.length);       // 否则取长度差最小的
-    if (d < bestLen) { bestLen = d; best = y; }
-  }
-  return best || "";
 }
 
 function _seasonHit(anime, season) {
@@ -294,7 +237,7 @@ async function searchDanmu(params) {
 /**
  * 用「标题 + 季集」合成原始文件名调 /api/v2/match，命中返回原始 match 条目。
  * Forward 的 searchDanmu 拿不到真实文件名，只能合成。
- * 格式：标题(年份) S01E01（空格分隔，英文括号，无后缀）
+ * 格式：标题 S01E01（空格分隔，英文括号，无后缀）
  * 命中只用于给候选排位，最终集号仍由 getDetailById 的 episodes 决定。
  */
 async function _matchAnimeByName(params, title, season) {
@@ -303,30 +246,8 @@ async function _matchAnimeByName(params, title, season) {
   var hasEp = isFinite(ep) && ep > 0;
   var hasSn = isFinite(sn) && sn > 0;
 
-  // 年份匹配开关：同时控制「反查年份」与「结果按年份筛选」
-  var yearMatch = String(_cfg(params, "yearMatch", "on")).toLowerCase() !== "off";
-
-  // 标题规范化（默认行为）：中文括号转英文
+  // 标题规范化：中文括号转英文
   var baseTitle = String(title || "").replace(/（/g, "(").replace(/）/g, ")");
-  var year = _extractYear(params);
-  // 开关开启且 params 不带年份 → 先 search/anime 反查一次（代价：多一次请求）
-  if (yearMatch && !year) {
-    try {
-      var sr = await Widget.http.get(
-        _server(params) + "/api/v2/search/anime?keyword=" + encodeURIComponent(title),
-        { headers: _headers(params) }
-      );
-      var sd = _unwrap(sr, "反查年份");
-      var sa = sd && Array.isArray(sd.animes) ? sd.animes : [];
-      year = _pickYearFromCandidates(title, sa);
-      console.log(TAG, "反查年份", title, "→", year || "(未取到)");
-    } catch (e) {
-      console.error(TAG, "反查年份失败，按不带年份处理", e.message);
-    }
-  }
-  if (year && baseTitle.indexOf("(" + year + ")") < 0) {
-    baseTitle = baseTitle + "(" + year + ")";
-  }
 
   var fileName;
   if (hasEp) {
@@ -346,14 +267,6 @@ async function _matchAnimeByName(params, title, season) {
     if (!data || !data.isMatched || !list.length) {
       console.log(TAG, "匹配", fileName, "→ 未命中");
       return [];
-    }
-    // 年份匹配：多结果时优先保留标题含该年份的条目
-    if (yearMatch && year && list.length > 1) {
-      var picked = [];
-      for (var yi = 0; yi < list.length; yi++) {
-        if (String(list[yi].animeTitle || "").indexOf(year) >= 0) picked.push(list[yi]);
-      }
-      if (picked.length) list = picked;
     }
     for (var i = 0; i < list.length; i++) {
       console.log(TAG, "匹配", fileName, "→", list[i].animeId,
