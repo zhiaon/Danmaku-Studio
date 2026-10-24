@@ -22,7 +22,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.9.0",
+  version: "4.9.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -440,7 +440,7 @@ async function getCommentsById(params) {
   }
 
   var response = await Widget.http.get(
-    server + "/api/v2/comment/" + commentId + "?withRelated=true&chConvert=1",
+    server + "/api/v2/comment/" + commentId + "?withRelated=true",
     {
       headers: {
         "Content-Type": "application/json",
