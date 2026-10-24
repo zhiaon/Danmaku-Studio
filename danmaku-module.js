@@ -20,7 +20,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.6.0",
+  version: "4.6.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -37,14 +37,25 @@ WidgetMetadata = {
       ]
     },
     {
-      name: "yearMatch",
-      title: "文件名匹配",
+      name: "fileMatch",
+      title: "匹配文件",
       type: "enumeration",
-      description: "匹配年份：多季剧从 bangumi 首集 airDate 取当前季年份拼入文件名；原始文件名匹配：纯标题不拼年份",
+      description: "开启时用文件名走 match 精确匹配；关闭时直接走 search/anime 搜索",
       value: "on",
       enumOptions: [
-        { title: "匹配年份", value: "on" },
-        { title: "原始文件名匹配", value: "off" }
+        { title: "开启", value: "on" },
+        { title: "关闭", value: "off" }
+      ]
+    },
+    {
+      name: "yearMatch",
+      title: "匹配年份",
+      type: "enumeration",
+      description: "开启时多季剧从 bangumi 首集 airDate 取当前季年份拼入文件名；关闭时纯标题不拼年份",
+      value: "on",
+      enumOptions: [
+        { title: "开启", value: "on" },
+        { title: "关闭", value: "off" }
       ]
     }
   ],
@@ -211,9 +222,9 @@ async function searchDanmu(params) {
       return { animes: [] };
     }
 
-    // 所有类型先走 match（剧集带季集，电影用纯标题）；
-    // match 未命中时 fallback 到 search/anime。
-    var hits = await _matchAnimeByName(params, keyword, season);
+    // 匹配文件开关：开启时走 match 精确匹配，关闭时直接走 search/anime
+    var fileMatch = String(_cfg(params, "fileMatch", "on")).toLowerCase() !== "off";
+    var hits = fileMatch ? await _matchAnimeByName(params, keyword, season) : [];
     var animes = [];
     var seen = {};
     for (var i = 0; i < hits.length; i++) {
