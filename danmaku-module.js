@@ -280,6 +280,7 @@ async function _matchAnimeByName(params, title, season) {
 
   // 年份从 params 自带读取（title 括号年份 / airDate / premiereDate），不额外发请求
   var year = yearMatch ? _extractYear(params) : "";
+  console.log(TAG, "诊断 airDate=", JSON.stringify(params && params.airDate), "premiereDate=", JSON.stringify(params && params.premiereDate), "title=", JSON.stringify(params && params.title), "→ year=", year);
   if (year && baseTitle.indexOf("(" + year + ")") < 0) {
     baseTitle = baseTitle + "(" + year + ")";
   }
