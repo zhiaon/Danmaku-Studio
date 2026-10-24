@@ -4,13 +4,12 @@
  * 数据源: 由「弹幕服务器」参数指定（DandanPlay v2 兼容协议，如 danmu_api 自部署实例）
  *   POST /api/v2/match   {matchMode, videoDuration, fileName, fileHash, fileSize}  自动匹配
  *     fileName 优先用播放器传来的 fileName，没有时用标题+季集合成；年份只从 params 拼入 fileName
- *   GET  /api/v2/search/anime?keyword=<kw>   电影兜底（无集号时用）
  *   GET  /api/v2/bangumi/:animeId            分集列表
- *   GET  /api/v2/comment/:commentId          整集弹幕
+ *   GET  /api/v2/comment/:commentId          整集弹幕（无 commentId 时先 match 再 comment）
  *
  * 设计原则：只做协议转换，不加工数据
  *   1) 三个环节全部实时请求，本地零缓存，每次播放都是最新数据；
- *   2) 剧集自动匹配走 match，电影无集号时走 search/anime；
+ *   2) 全部走 match，不走 search/anime；流程是先 match 再 comment，match 未命中直接返回空；
  *   3) 年份匹配（开关 yearMatch）：只用 match 匹配年份，不用结果匹配年份。
  *      从 params 自带年份拼入文件名，只发一次 match，由 match 服务端按年份匹配；
  *      不用 search 结果定年份，也不用返回结果筛年份；
@@ -23,7 +22,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.8.0",
+  version: "4.9.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -134,19 +133,7 @@ function _unwrap(resp, what) {
 // ============================ 无本地缓存 ============================
 // 搜索 / 分集 / 弹幕全部实时请求，模块不读写 Widget.storage。
 
-// ============================ 标题规范化 ============================
-
-/** 候选去重键：去掉来源后缀与类型标注，并抹平括号/书名号/空格差异 */
-function _titleKey(title) {
-  var t = String(title || "");
-  t = t.replace(/\s*from\s+.*$/i, "");
-  t = t.replace(/【[^】]*】/g, "");
-  t = t.replace(/（/g, "(").replace(/）/g, ")");
-  t = t.replace(/[()]/g, "");
-  t = t.replace(/[《》]/g, "");
-  t = t.replace(/[·・\s]/g, "");
-  return t;
-}
+// ============================ 年份提取 ============================
 
 /** 从一段文本里提取年份：括号年份优先，其次“YYYY年”，最后独立的四位年份 */
 function _yearFromText(text) {
@@ -246,7 +233,7 @@ function _toChinese(n) {
 
 async function searchDanmu(params) {
   try {
-    var server = _server(params);
+    _server(params); // 仅校验服务器已配置，match 里会再取一次
     // 另一播放器直接传 fileName（如“凡人修仙传 S01E11”）时，从 fileName 里拆标题/季/集
     var parsed = params.fileName ? _parseFileName(params.fileName) : { title: "", season: "", episode: "" };
     var season = params.season !== undefined && params.season !== null
@@ -258,9 +245,7 @@ async function searchDanmu(params) {
       return { animes: [] };
     }
 
-    // 所有类型先走 match（剧集带季集，电影用纯标题）；
-    // match 未命中时 fallback 到 search/anime。
-    // 年份只用 match 匹配：match 文件名里带 params 自带年份，不用 search 结果定年份。
+    // 只走 match，不走 search：年份只用 match 匹配，match 文件名里带 params 自带年份。
     var hits = await _matchAnimeByName(params, keyword, season);
     var animes = [];
     var seen = {};
@@ -284,24 +269,9 @@ async function searchDanmu(params) {
     console.log(TAG, "匹配", keyword, "命中", animes.length, "部（match 直连）");
     if (animes.length) return { animes: animes };
 
-    // match 未命中 → fallback search/anime
-    console.log(TAG, "match 未命中，fallback search/anime", keyword);
-    var mv = _unwrap(
-      await Widget.http.get(server + "/api/v2/search/anime?keyword=" + encodeURIComponent(keyword), { headers: _headers(params) }),
-      "搜索候选"
-    );
-    if (!mv || mv.success === false) return { animes: [] };
-    var ma = Array.isArray(mv.animes) ? mv.animes : [];
-    console.log(TAG, "fallback search", keyword, "命中", ma.length, "条");
-    // 按标题归一化去重（同片多平台来源只保留一条），不按年份筛结果
-    var uniq = [];
-    var uid = {};
-    for (var u = 0; u < ma.length; u++) {
-      var k = _titleKey(ma[u].animeTitle);
-      if (!uid[k]) { uid[k] = 1; uniq.push(ma[u]); }
-    }
-    console.log(TAG, "fallback 去重后", uniq.length, "条，只返回首条");
-    return { animes: uniq.slice(0, 1) };
+    // match 未命中直接返回空，不再走 search/anime
+    console.log(TAG, "匹配", keyword, "未命中，search 已去掉，返回空列表");
+    return { animes: [] };
   } catch (e) {
     console.error(TAG, "searchDanmu 失败", e);
     throw e;
@@ -441,16 +411,34 @@ async function getDetailById(params) {
 // ============================ 3. 整集弹幕加载 ============================
 
 /**
- * 解析 commentId：优先客户端给的，其次用 match 接口按文件名反查。
- * 反查能救活 "commentId 没传但 title/link 有" 的播放场景。
+ * 整集弹幕：先 match 再 comment，跟另一播放器一样。
+ * 1) 客户端给了 commentId（或 episodeId）就直接用它调 comment；
+ * 2) 没给时，先按播放器参数调一次 match（fileName/matchMode/fileHash 等，年份拼入 fileName），
+ *    取首条 match 的 episodeId 当 commentId，再调 comment；
+ * 3) match 没命中就返回 null，不再调 comment。
+ * comment 本身一次请求、原样返回、失败直接抛错。
  */
 async function getCommentsById(params) {
   var server = params.server;
-  var commentId = params.commentId;
+  var commentId = params.commentId || params.episodeId || "";
 
-  if (!commentId) return null;
+  if (!commentId) {
+    // 无 commentId 时先 match 再 comment：fileName 直接用播放器传来的，没有时用标题
+    var parsed = params.fileName ? _parseFileName(params.fileName) : { title: "", season: "" };
+    var keyword = params.title || parsed.title || "";
+    var season = params.season !== undefined && params.season !== null
+      ? String(params.season) : (parsed.season || "");
+    if (!keyword) return null;
+    var hits = await _matchAnimeByName(params, keyword, season);
+    if (!hits || !hits.length) return null;
+    var first = hits[0];
+    commentId = first.episodeId !== undefined && first.episodeId !== null
+      ? first.episodeId
+      : (first.commentId !== undefined && first.commentId !== null ? first.commentId : "");
+    if (!commentId) return null;
+    console.log(TAG, "无 commentId，先 match 再 comment", keyword, "→ commentId", commentId);
+  }
 
-  // 与 danmu_api 完全一致：一次请求、原样返回、失败直接抛错、无兜底
   var response = await Widget.http.get(
     server + "/api/v2/comment/" + commentId + "?withRelated=true&chConvert=1",
     {
