@@ -10,7 +10,7 @@
  * 设计原则：只做协议转换，不加工数据
  *   1) 三个环节全部实时请求，本地零缓存，每次播放都是最新数据；
  *   2) 剧集自动匹配走 match，电影无集号时走 search/anime；
- *   3) 年份匹配（开关 yearMatch）：开启时若标题自带(年份)则拼入文件名辅助匹配；不额外发请求，不影响播放速度；
+ *   3) 年份匹配（开关 yearMatch）：多季剧从 bangumi 首集 airDate 取当前季年份拼入文件名；电影/无季从 params 自带年份读取；不反查 search；
  *   4) 分集列表原样返回，只按 seasonId 收窄多季番剧；
  *   5) 弹幕原样返回，不合并、不去重、不切片、不精简字段。
  *
@@ -20,7 +20,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.5.1",
+  version: "4.6.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -40,7 +40,7 @@ WidgetMetadata = {
       name: "yearMatch",
       title: "文件名匹配",
       type: "enumeration",
-      description: "匹配年份：标题自带(年份)时拼入文件名辅助匹配；原始文件名匹配：纯标题不拼年份",
+      description: "匹配年份：多季剧从 bangumi 首集 airDate 取当前季年份拼入文件名；原始文件名匹配：纯标题不拼年份",
       value: "on",
       enumOptions: [
         { title: "匹配年份", value: "on" },
@@ -261,9 +261,74 @@ async function searchDanmu(params) {
 }
 
 /**
+ * 预查当前季首集年份：先 match 不带年份拿 animeId → bangumi 按 season 筛 → 取首集 airDate 年份。
+ * 多季剧用，保证取到的是当前季第一集的年份（而非第一季的）。
+ * 代价：多 2 次请求（预查 match + 预查 bangumi），仅 yearMatch 开启且有 season 时触发。
+ */
+async function _prefetchSeasonYear(params, baseTitle, sn, ep, hasEp) {
+  var preFileName = baseTitle;
+  if (hasEp) {
+    preFileName = baseTitle + " S" + (sn < 10 ? "0" : "") + sn + "E" + (ep < 10 ? "0" : "") + ep;
+  }
+  try {
+    var resp = await Widget.http.post(
+      _server(params) + "/api/v2/match",
+      JSON.stringify({ fileName: preFileName }),
+      { headers: _headers(params) }
+    );
+    var data = _unwrap(resp, "预查匹配");
+    if (!data || !data.isMatched || !data.matches || !data.matches.length) return "";
+    var animeId = data.matches[0].animeId;
+
+    var bgResp = await Widget.http.get(
+      _server(params) + "/api/v2/bangumi/" + encodeURIComponent(animeId),
+      { headers: _headers(params) }
+    );
+    var bgData = _unwrap(bgResp, "预查分集");
+    if (!bgData || !bgData.bangumi || !bgData.bangumi.episodes) return "";
+
+    var eps = bgData.bangumi.episodes;
+    var seasons = bgData.bangumi.seasons || [];
+
+    // 按 season 筛当前季（复用 getDetailById 的逻辑）
+    if (seasons.length > 1) {
+      var idx = sn - 1;
+      var target = null;
+      if (isFinite(idx) && idx >= 0 && idx < seasons.length) target = seasons[idx];
+      if (!target) {
+        for (var i = 0; i < seasons.length; i++) {
+          if (_seasonHit(seasons[i], String(sn))) { target = seasons[i]; break; }
+        }
+      }
+      if (target && target.id) {
+        var subset = [];
+        for (var j = 0; j < eps.length; j++) {
+          if (eps[j].seasonId === target.id) subset.push(eps[j]);
+        }
+        if (subset.length) eps = subset;
+      }
+    }
+
+    // 取首集 airDate 年份
+    if (eps[0] && eps[0].airDate) {
+      var m = String(eps[0].airDate).match(/(\d{4})/);
+      if (m) {
+        console.log(TAG, "预查年份", baseTitle, "S" + sn, "→", m[1], "（首集", eps[0].airDate, "）");
+        return m[1];
+      }
+    }
+    console.log(TAG, "预查年份", baseTitle, "S" + sn, "→ 未取到");
+    return "";
+  } catch (e) {
+    console.error(TAG, "预查年份失败", e.message);
+    return "";
+  }
+}
+
+/**
  * 用「标题 + 季集」合成原始文件名调 /api/v2/match，命中返回原始 match 条目。
  * Forward 的 searchDanmu 拿不到真实文件名，只能合成。
- * 格式：标题 S01E01（空格分隔，英文括号，无后缀）
+ * 格式：标题(年份) S01E01（空格分隔，英文括号，无后缀）
  * 命中只用于给候选排位，最终集号仍由 getDetailById 的 episodes 决定。
  */
 async function _matchAnimeByName(params, title, season) {
@@ -272,14 +337,20 @@ async function _matchAnimeByName(params, title, season) {
   var hasEp = isFinite(ep) && ep > 0;
   var hasSn = isFinite(sn) && sn > 0;
 
-  // 年份匹配开关：只控制「标题自带年份时是否拼入文件名 + 多结果按年份筛选」
+  // 年份匹配开关：控制「拼年份 + 多结果按年份筛选」
   var yearMatch = String(_cfg(params, "yearMatch", "on")).toLowerCase() !== "off";
 
   // 标题规范化：中文括号转英文
   var baseTitle = String(title || "").replace(/（/g, "(").replace(/）/g, ")");
 
-  // 标题自带(年份)时才拼入（不额外发请求反查）
-  var year = yearMatch ? _extractYear(params) : "";
+  // 年份获取：优先 params 自带，多季剧预查 bangumi 首集 airDate
+  var year = "";
+  if (yearMatch) {
+    year = _extractYear(params);                         // params 自带（title 括号年份 / airDate / premiereDate）
+    if (!year && hasSn) {
+      year = await _prefetchSeasonYear(params, baseTitle, sn, ep, hasEp);
+    }
+  }
   if (year && baseTitle.indexOf("(" + year + ")") < 0) {
     baseTitle = baseTitle + "(" + year + ")";
   }
