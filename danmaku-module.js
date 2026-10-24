@@ -20,7 +20,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.5.0",
+  version: "4.5.1",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -38,13 +38,13 @@ WidgetMetadata = {
     },
     {
       name: "yearMatch",
-      title: "年份匹配",
+      title: "文件名匹配",
       type: "enumeration",
-      description: "开启后，若标题自带(年份)则拼入文件名辅助匹配；不额外发请求，不影响播放速度",
+      description: "匹配年份：标题自带(年份)时拼入文件名辅助匹配；原始文件名匹配：纯标题不拼年份",
       value: "on",
       enumOptions: [
-        { title: "开启", value: "on" },
-        { title: "关闭", value: "off" }
+        { title: "匹配年份", value: "on" },
+        { title: "原始文件名匹配", value: "off" }
       ]
     }
   ],
