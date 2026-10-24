@@ -2,7 +2,8 @@
  * 江砚弹幕模块（DandanPlay v2 兼容协议）
  *
  * 数据源: 由「弹幕服务器」参数指定（DandanPlay v2 兼容协议，如 danmu_api 自部署实例）
- *   POST /api/v2/match   {fileName:"..."}    自动匹配（剧集：标题+季集合成文件名）
+ *   POST /api/v2/match   {matchMode, videoDuration, fileName, fileHash, fileSize}  自动匹配
+ *     fileName 优先用播放器传来的 fileName，没有时用标题+季集合成；年份只从 params 拼入 fileName
  *   GET  /api/v2/search/anime?keyword=<kw>   电影兜底（无集号时用）
  *   GET  /api/v2/bangumi/:animeId            分集列表
  *   GET  /api/v2/comment/:commentId          整集弹幕
@@ -22,7 +23,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "江砚弹幕",
-  version: "4.7.1",
+  version: "4.8.0",
   requiredVersion: "0.0.2",
   description: "多平台弹幕聚合，统一加载",
   author: "江砚",
@@ -167,12 +168,40 @@ function _yearFromText(text) {
  */
 function _extractYear(params) {
   if (!params) return "";
-  var fields = ["title", "year", "releaseYear", "airDate", "premiereDate", "firstAirDate", "releaseDate", "firstAired", "date"];
+  var fields = ["title", "fileName", "year", "releaseYear", "airDate", "premiereDate", "firstAirDate", "releaseDate", "firstAired", "date"];
   for (var i = 0; i < fields.length; i++) {
     var y = _yearFromText(params[fields[i]]);
     if (y) return y;
   }
   return "";
+}
+
+/** 解析播放器传来的 fileName，如“凡人修仙传 S01E11”→标题/季/集 */
+function _parseFileName(fileName) {
+  var s = String(fileName || "").trim();
+  var m = s.match(/^(.*?)\s+[Ss](\d+)[Ee](\d+)\b/);
+  if (m) return { title: m[1].trim(), season: String(parseInt(m[2], 10)), episode: String(parseInt(m[3], 10)) };
+  return { title: s, season: "", episode: "" };
+}
+
+/** 把年份拼入播放器 fileName：已有年份不重复；有季集时插在季集前，如“标题(2020) S01E11” */
+function _insertYearIntoFileName(fileName, year) {
+  var f = String(fileName || "").replace(/（/g, "(").replace(/）/g, ")");
+  if (!year || f.indexOf("(" + year + ")") >= 0) return f;
+  var m = f.match(/^(.*?)([ \t]+[Ss]\d+[Ee]\d+.*)$/);
+  if (m) return m[1] + "(" + year + ")" + m[2];
+  return f + "(" + year + ")";
+}
+
+/** 按另一播放器的参数格式组装 match 请求体：只发这五个字段，不多不少 */
+function _matchBody(params, fileName) {
+  return {
+    matchMode: String((params && params.matchMode) || "fileNameOnly"),
+    videoDuration: (params && params.videoDuration !== undefined && params.videoDuration !== null) ? (Number(params.videoDuration) || 0) : 0,
+    fileName: fileName,
+    fileHash: String((params && (params.fileHash || params.hash)) || ""),
+    fileSize: (params && params.fileSize !== undefined && params.fileSize !== null) ? (Number(params.fileSize) || 0) : 0
+  };
 }
 
 function _seasonHit(anime, season) {
@@ -218,9 +247,11 @@ function _toChinese(n) {
 async function searchDanmu(params) {
   try {
     var server = _server(params);
+    // 另一播放器直接传 fileName（如“凡人修仙传 S01E11”）时，从 fileName 里拆标题/季/集
+    var parsed = params.fileName ? _parseFileName(params.fileName) : { title: "", season: "", episode: "" };
     var season = params.season !== undefined && params.season !== null
-      ? String(params.season) : "";
-    var keyword = params.title || "";
+      ? String(params.season) : (parsed.season || "");
+    var keyword = params.title || parsed.title || "";
 
     if (!keyword) {
       console.log(TAG, "搜索关键词为空，返回空列表");
@@ -278,9 +309,10 @@ async function searchDanmu(params) {
 }
 
 /**
- * 用「标题 + 季集」合成原始文件名调 /api/v2/match，命中返回原始 match 条目。
- * Forward 的 searchDanmu 拿不到真实文件名，只能合成。
- * 格式：标题(年份) S01E01（空格分隔，英文括号，无后缀）
+ * 调 /api/v2/match，命中返回原始 match 条目。
+ * 播放器传了 fileName 时直接用它（只拼年份）；Forward 拿不到真实文件名时，
+ * 用「标题 + 季集」合成，格式：标题(年份) S01E01（空格分隔，英文括号，无后缀）。
+ * 请求体按播放器参数写：matchMode/videoDuration/fileName/fileHash/fileSize。
  * 命中只用于给候选排位，最终集号仍由 getDetailById 的 episodes 决定。
  */
 async function _matchAnimeByName(params, title, season) {
@@ -303,7 +335,10 @@ async function _matchAnimeByName(params, title, season) {
   }
 
   var fileName;
-  if (hasEp) {
+  if (params && params.fileName) {
+    // 另一播放器参数：直接用它传来的 fileName，只把 params 年份拼进去，不重拼标题/季集
+    fileName = _insertYearIntoFileName(params.fileName, year);
+  } else if (hasEp) {
     if (!hasSn) sn = 1;
     fileName = baseTitle + " S" + (sn < 10 ? "0" : "") + sn + "E" + (ep < 10 ? "0" : "") + ep;
   } else {
@@ -312,7 +347,7 @@ async function _matchAnimeByName(params, title, season) {
   try {
     var resp = await Widget.http.post(
       _server(params) + "/api/v2/match",
-      JSON.stringify({ fileName: fileName }),
+      JSON.stringify(_matchBody(params, fileName)),
       { headers: _headers(params) }
     );
     var data = _unwrap(resp, "文件名匹配");
