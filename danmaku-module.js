@@ -2,12 +2,12 @@
 
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
-  title: "江砚弹幕",
+  title: "许舟弹幕",
   version: "4.9.4",
   requiredVersion: "0.0.2",
-  description: "多平台弹幕聚合，统一加载",
-  author: "江砚",
-  site: "https://github.com/zhiaon/jiangyan-danmu",
+  description: "Forward 弹幕接入模块，对接 DandanPlay v2 兼容 API",
+  author: "许舟",
+  site: "https://github.com/zhiaon/Danmaku-Studio",
 
   globalParams: [
     {

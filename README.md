@@ -1,17 +1,17 @@
-# 江砚弹幕 (danmaku-module.js)
+# 许舟弹幕 (danmaku-module.js)
 
-[![Version](https://img.shields.io/badge/version-4.9.4-blue)](https://github.com/zhiaon/jiangyan-danmu/blob/main/danmaku-module.js)
+[![Version](https://img.shields.io/badge/version-4.9.4-blue)](https://github.com/zhiaon/Danmaku-Studio/blob/main/danmaku-module.js)
 
 为 Forward 兼容播放器提供的开源弹幕接入模块，对接单个 DandanPlay v2 兼容 API，完成搜索、选集和弹幕加载。
 
-**江砚弹幕是播放器模块，不是 danmu_api 服务端。** 模块需要连接另行部署的兼容 API，不附带公共接口、账号或密钥。仓库公开完整源码，单文件可独立运行。
+**许舟弹幕是播放器模块，不是 danmu_api 服务端。** 模块需要连接另行部署的兼容 API，不附带公共接口、账号或密钥。仓库公开完整源码，单文件可独立运行。
 
 ## 在线安装
 
 复制下面的 Raw 直链，在播放器的模块管理中选择「通过链接添加」或「通过 URL 导入」，粘贴后确认：
 
 ```text
-https://raw.githubusercontent.com/zhiaon/jiangyan-danmu/main/danmaku-module.js
+https://raw.githubusercontent.com/zhiaon/Danmaku-Studio/main/danmaku-module.js
 ```
 
 安装后填写「弹幕服务器」。模块 ID 保持 `zhiaon.logvar.danmu`，从旧版升级时原服务器配置继续有效。
@@ -88,7 +88,7 @@ node --check danmaku-module.js
 
 ## 反馈与贡献
 
-欢迎通过 [Issues](https://github.com/zhiaon/jiangyan-danmu/issues) 反馈问题与改进。请提供模块版本、播放器和系统版本、作品类型与季集、预期行为及脱敏诊断，不要附带私人接口或凭据。
+欢迎通过 [Issues](https://github.com/zhiaon/Danmaku-Studio/issues) 反馈问题与改进。请提供模块版本、播放器和系统版本、作品类型与季集、预期行为及脱敏诊断，不要附带私人接口或凭据。
 
 ## 版本
 
@@ -105,6 +105,6 @@ node --check danmaku-module.js
 
 ## 许可与致谢
 
-作者：[江砚](https://github.com/zhiaon)。
+作者：[许舟](https://github.com/zhiaon)。
 
 本仓库暂未附带 LICENSE 文件。感谢 [danmu_api](https://github.com/huangxd-/danmu_api)、[ForwardWidgets](https://github.com/InchStudio/ForwardWidgets) 和 [弹弹play](https://www.dandanplay.com/) 的开源实现、协议与文档。
