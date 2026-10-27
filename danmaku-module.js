@@ -3,7 +3,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "许舟弹幕",
-  version: "4.9.5",
+  version: "4.9.6",
   requiredVersion: "0.0.2",
   description: "Forward 弹幕接入模块，对接 DandanPlay v2 兼容 API",
   author: "许舟",
@@ -307,7 +307,7 @@ async function getCommentsById(params) {
   }
 
   var response = await Widget.http.get(
-    server + "/api/v2/comment/" + commentId + "?withRelated=true",
+    server + "/api/v2/comment/" + commentId + "?withRelated=true&chConvert=1",
     {
       headers: {
         "Content-Type": "application/json",
