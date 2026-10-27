@@ -1,6 +1,6 @@
 # 许舟弹幕 (danmaku-module.js)
 
-[![Version](https://img.shields.io/badge/version-4.9.5-blue)](https://github.com/zhiaon/Danmaku-Studio/blob/main/danmaku-module.js)
+[![Version](https://img.shields.io/badge/version-4.9.6-blue)](https://github.com/zhiaon/Danmaku-Studio/blob/main/danmaku-module.js)
 
 为 Forward 兼容播放器提供的开源弹幕接入模块，对接单个 DandanPlay v2 兼容 API，完成搜索、选集和弹幕加载。
 
@@ -22,6 +22,10 @@ https://{domain}/{token}
 
 > 地址末尾的 `/` 会被模块自动去掉，但建议还是不要带 `/`。server 为空时不产生任何请求，避免误连。
 
+## 4.9.6 更新
+
+- comment 请求加上繁简转换：`GET /api/v2/comment/{id}?withRelated=true&chConvert=1`，弹幕统一转简体（chConvert：0=不转换，1=简体，2=繁体）。
+
 ## 4.9.5 更新
 
 - 删除匹配年份功能：`yearMatch` 开关、取年份和插年份逻辑全部删除，match 直接用 `fileName` 原样匹配。
@@ -34,7 +38,7 @@ https://{domain}/{token}
 ## 4.9 功能
 
 - **先 match 再 comment**：没有 `commentId` 时先调一次 `/api/v2/match`，取首个匹配的 `episodeId` 再调 comment；match 未命中时返回空，不调 comment。
-- **comment 只带一个参数**：`GET /api/v2/comment/{id}?withRelated=true`，不带 `chConvert`，原样返回服务端数据。
+- **comment 带繁简转换**：`GET /api/v2/comment/{id}?withRelated=true&chConvert=1`，弹幕统一转简体，原样返回服务端数据。
 - **没有 search 兜底**：`searchDanmu` 只走 `/api/v2/match`，未命中返回 `{animes: []}`，不调 `/api/v2/search/anime`。
 - **match 请求体只有一个字段**：`POST /api/v2/match` 的请求体就是 `{"fileName": fileName}`，不带 `matchMode` / `videoDuration` / `fileHash` / `fileSize`。
 - **实时请求**：整份文件 323 行、13 个函数，不读写 Widget.storage，每次播放都实时请求，本地零缓存。
@@ -89,8 +93,9 @@ node --check danmaku-module.js
 
 ## 版本
 
-当前版本 **4.9.5**
+当前版本 **4.9.6**
 
+- **v4.9.6**：comment 加上 `chConvert=1`，弹幕统一转简体
 - **v4.9.5**：删除匹配年份功能，match 直接用 `fileName` 原样匹配，修复错年份导致没命中
 - **v4.9.4**：与 4.9.3 功能相同，纯 JS 重新提交，解决此前 base64 存储导致 Forward 解析报错的问题
 - **v4.9.3**：去掉全部注释，排除注释解析干扰，功能与 4.9.2 相同
