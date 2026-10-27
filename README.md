@@ -1,6 +1,6 @@
 # 许舟弹幕 (danmaku-module.js)
 
-[![Version](https://img.shields.io/badge/version-4.9.4-blue)](https://github.com/zhiaon/Danmaku-Studio/blob/main/danmaku-module.js)
+[![Version](https://img.shields.io/badge/version-4.9.5-blue)](https://github.com/zhiaon/Danmaku-Studio/blob/main/danmaku-module.js)
 
 为 Forward 兼容播放器提供的开源弹幕接入模块，对接单个 DandanPlay v2 兼容 API，完成搜索、选集和弹幕加载。
 
@@ -22,6 +22,11 @@ https://{domain}/{token}
 
 > 地址末尾的 `/` 会被模块自动去掉，但建议还是不要带 `/`。server 为空时不产生任何请求，避免误连。
 
+## 4.9.5 更新
+
+- 删除匹配年份功能：`yearMatch` 开关、取年份和插年份逻辑全部删除，match 直接用 `fileName` 原样匹配。
+- 修复此前播放器参数带错年份导致 match 没命中、没弹幕的问题，例如 `凡人修仙传 S01E41` 不再被拼成 `(2022)` 版本。
+
 ## 4.9.4 更新
 
 - 纯 JS 重新提交，解决此前 base64 存储导致 Forward 解析报错的问题，功能与 4.9.3 相同。
@@ -32,7 +37,7 @@ https://{domain}/{token}
 - **comment 只带一个参数**：`GET /api/v2/comment/{id}?withRelated=true`，不带 `chConvert`，原样返回服务端数据。
 - **没有 search 兜底**：`searchDanmu` 只走 `/api/v2/match`，未命中返回 `{animes: []}`，不调 `/api/v2/search/anime`。
 - **match 请求体只有一个字段**：`POST /api/v2/match` 的请求体就是 `{"fileName": fileName}`，不带 `matchMode` / `videoDuration` / `fileHash` / `fileSize`。
-- **实时请求**：整份文件 371 行、16 个函数，不读写 Widget.storage，每次播放都实时请求，本地零缓存。
+- **实时请求**：整份文件 323 行、13 个函数，不读写 Widget.storage，每次播放都实时请求，本地零缓存。
 - **只做协议转换**：不做多源合并、打分、去重、缓存、集号推断等中间层。
 
 ## 参数（globalParams）
@@ -40,14 +45,6 @@ https://{domain}/{token}
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | server | **必填** | 弹幕服务器地址。未填写时不产生任何弹幕 |
-| yearMatch | `on`（开启） | 匹配年份开关，见下方说明 |
-
-## 匹配年份（yearMatch）
-
-- 开启（默认）：只从播放器参数本身取年份，字段包括 `title`、`fileName`、`year`、`releaseYear`、`airDate`、`premiereDate`、`firstAirDate`、`releaseDate`、`firstAired`、`date`，年份形式包括 `(2020)`、`2020年`、裸年份。
-- 取到年份后拼进 match 的 `fileName`：有 `fileName` 时插到集号前，例如 `凡人修仙传 S01E11` + 2020 → `凡人修仙传(2020) S01E11`；没有 `fileName` 时拼到标题后，再合成 `标题(年份) S01E01` 这样的文件名。
-- 关闭：不拼年份，`fileName` 原样发 match。
-- 本模块不通过 search 结果找年份，也不对 match 结果按年份过滤。
 
 ## 模块结构
 
@@ -62,12 +59,12 @@ https://{domain}/{token}
 通过相同 Raw 地址更新即可。主分支直链始终提供当前正式版本。
 
 - 仅配置一个 API，不使用来源编码 ID，旧版的选择和配置继续有效。
-- 如果更新后 Forward 里仍显示旧版本，先区分是 Raw CDN 缓存还是 Forward App 本地缓存：删掉旧模块、彻底退出 Forward 再重开，用原 Raw 地址重新导入，导入后把弹幕服务器填回，并保持匹配年份开启。
+- 如果更新后 Forward 里仍显示旧版本，先区分是 Raw CDN 缓存还是 Forward App 本地缓存：删掉旧模块、彻底退出 Forward 再重开，用原 Raw 地址重新导入，导入后把弹幕服务器填回。
 - 服务器不可用时没有本地缓存兜底，请求会直接失败，这是实时请求的代价。
 
 ## 已知限制
 
-- 剧集、动漫、电视剧的参数通常不带年份，这种情况下匹配年份开关开着也不会产生年份匹配，这是目前接受的现状；电影参数带年份时，年份匹配正常生效。
+- 不再做年份匹配：`fileName` 原样送 match，播放器参数带错年份不再导致没命中。
 - match 未命中时不回退到 search，搜索结果为空是预期行为，不是接口故障。
 - 本模块不托管、不存储、不提供任何视频和弹幕内容，弹幕数据全部来自用户自行填写的弹幕服务器。
 
@@ -83,7 +80,7 @@ node --check danmaku-module.js
 
 | 路径 | 内容 |
 | --- | --- |
-| `danmaku-module.js` | 可导入成品，371 行、16 个函数 |
+| `danmaku-module.js` | 可导入成品，323 行、13 个函数 |
 | `README.md` | 本说明 |
 
 ## 反馈与贡献
@@ -92,8 +89,9 @@ node --check danmaku-module.js
 
 ## 版本
 
-当前版本 **4.9.4**
+当前版本 **4.9.5**
 
+- **v4.9.5**：删除匹配年份功能，match 直接用 `fileName` 原样匹配，修复错年份导致没命中
 - **v4.9.4**：与 4.9.3 功能相同，纯 JS 重新提交，解决此前 base64 存储导致 Forward 解析报错的问题
 - **v4.9.3**：去掉全部注释，排除注释解析干扰，功能与 4.9.2 相同
 - **v4.9.2**：match 请求体改回原来的一行，只含 `fileName`
