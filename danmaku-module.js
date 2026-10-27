@@ -3,7 +3,7 @@
 WidgetMetadata = {
   id: "zhiaon.logvar.danmu",
   title: "许舟弹幕",
-  version: "4.9.4",
+  version: "4.9.5",
   requiredVersion: "0.0.2",
   description: "Forward 弹幕接入模块，对接 DandanPlay v2 兼容 API",
   author: "许舟",
@@ -17,17 +17,6 @@ WidgetMetadata = {
       description: "DandanPlay v2 弹幕服务接口，兼容 danmu_api 协议，填写时请勿在末尾添加 /",
       placeholders: [
         { title: "示例 danmu_api", value: "https://{domain}/{token}" }
-      ]
-    },
-    {
-      name: "yearMatch",
-      title: "匹配年份",
-      type: "enumeration",
-      description: "开启时把 params 自带年份拼入文件名，只用 match 匹配年份；关闭时纯标题不拼年份",
-      value: "on",
-      enumOptions: [
-        { title: "开启", value: "on" },
-        { title: "关闭", value: "off" }
       ]
     }
   ],
@@ -104,40 +93,11 @@ function _unwrap(resp, what) {
   return resp.data;
 }
 
-function _yearFromText(text) {
-  var s = String(text || "");
-  var m = s.match(/[（(【\[]\s*(19\d{2}|20\d{2})\s*[）)】\]]/);
-  if (m) return m[1];
-  m = s.match(/(19\d{2}|20\d{2})\s*年/);
-  if (m) return m[1];
-  m = s.match(/(?:^|[^\d])(19\d{2}|20\d{2})(?:[^\d]|$)/);
-  if (m) return m[1];
-  return "";
-}
-
-function _extractYear(params) {
-  if (!params) return "";
-  var fields = ["title", "fileName", "year", "releaseYear", "airDate", "premiereDate", "firstAirDate", "releaseDate", "firstAired", "date"];
-  for (var i = 0; i < fields.length; i++) {
-    var y = _yearFromText(params[fields[i]]);
-    if (y) return y;
-  }
-  return "";
-}
-
 function _parseFileName(fileName) {
   var s = String(fileName || "").trim();
   var m = s.match(/^(.*?)\s+[Ss](\d+)[Ee](\d+)\b/);
   if (m) return { title: m[1].trim(), season: String(parseInt(m[2], 10)), episode: String(parseInt(m[3], 10)) };
   return { title: s, season: "", episode: "" };
-}
-
-function _insertYearIntoFileName(fileName, year) {
-  var f = String(fileName || "").replace(/（/g, "(").replace(/）/g, ")");
-  if (!year || f.indexOf("(" + year + ")") >= 0) return f;
-  var m = f.match(/^(.*?)([ \t]+[Ss]\d+[Ee]\d+.*)$/);
-  if (m) return m[1] + "(" + year + ")" + m[2];
-  return f + "(" + year + ")";
 }
 
 function _seasonHit(anime, season) {
@@ -231,20 +191,12 @@ async function _matchAnimeByName(params, title, season) {
   var hasEp = isFinite(ep) && ep > 0;
   var hasSn = isFinite(sn) && sn > 0;
 
-  var yearMatch = String(_cfg(params, "yearMatch", "on")).toLowerCase() !== "off";
-
   var baseTitle = String(title || "").replace(/（/g, "(").replace(/）/g, ")");
-
-  var year = yearMatch ? _extractYear(params) : "";
-  console.log(TAG, "诊断 airDate=", JSON.stringify(params && params.airDate), "premiereDate=", JSON.stringify(params && params.premiereDate), "title=", JSON.stringify(params && params.title), "→ year=", year);
-  if (year && baseTitle.indexOf("(" + year + ")") < 0) {
-    baseTitle = baseTitle + "(" + year + ")";
-  }
 
   var fileName;
   if (params && params.fileName) {
 
-    fileName = _insertYearIntoFileName(params.fileName, year);
+    fileName = params.fileName;
   } else if (hasEp) {
     if (!hasSn) sn = 1;
     fileName = baseTitle + " S" + (sn < 10 ? "0" : "") + sn + "E" + (ep < 10 ? "0" : "") + ep;
