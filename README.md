@@ -1,4 +1,4 @@
-# 许舟弹幕 (danmaku-module.js)
+# 许舟弹幕
 
 [![Version](https://img.shields.io/badge/version-4.9.6-blue)](https://github.com/zhiaon/Danmaku-Studio/blob/main/danmaku-module.js)
 
